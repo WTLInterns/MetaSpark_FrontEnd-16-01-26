@@ -67,7 +67,7 @@ export default function OrderDetailsPage({ params }) {
         <nav className="mt-4 space-y-1 text-sm">
           <SideItem href="/dashboard" active>Dashboard</SideItem>
           <SideItem>Communications</SideItem>
-          <SideItem>All Orders</SideItem>
+          <SideItem href="/orders">All Orders</SideItem>
           <SideItem>Customers</SideItem>
           <SideItem>Products</SideItem>
           <SideItem>Inventory</SideItem>
