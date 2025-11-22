@@ -1,8 +1,7 @@
+
 'use client';
 
 import AdminTemplate from '../template';
-
-'use client'
 
 export default function HRMPage() {
   return (

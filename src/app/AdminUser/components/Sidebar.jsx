@@ -40,7 +40,7 @@ const menuItems = [
   { name: 'Production Line', href: '/AdminUser/production-line', icon: FiTruck },
   { name: 'Machining Jobs', href: '/AdminUser/machining-jobs', icon: FiSettings },
   { name: 'Inspection Queue', href: '/AdminUser/inspection-queue', icon: FiCheckCircle },
-  { name: 'User Management', href: '/AdminUser/users', icon: FiUsers },
+  { name: 'User Management', href: '/AdminUser/user-management', icon: FiUsers },
 ];
 
 export default function Sidebar() {
