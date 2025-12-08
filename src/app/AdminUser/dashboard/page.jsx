@@ -8,7 +8,161 @@ import * as orderApi from '../orders/api';
 import toast from 'react-hot-toast';
 import { Toaster } from 'react-hot-toast';
 
-function DetailsPanel({ order, onClose }) {
+function DetailsPanel({ order, onClose, onUpdateOrder }) {
+  // Add state for the status update form
+  const [newStatus, setNewStatus] = useState('');
+  const [comment, setComment] = useState('');
+  const [attachment, setAttachment] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [statusHistory, setStatusHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [selectedAttachment, setSelectedAttachment] = useState(null);
+
+  const getStatusBadgeClasses = (status) => {
+    const base = 'inline-flex items-center px-3 py-1 rounded-full text-xs font-medium';
+    const value = (status || '').toUpperCase();
+
+    switch (value) {
+      case 'INQUIRY':
+      case 'ENQUIRY':
+        return `${base} bg-slate-100 text-slate-700`;
+      case 'DESIGN':
+        return `${base} bg-purple-100 text-purple-700`;
+      case 'PRODUCTION':
+        return `${base} bg-orange-100 text-orange-700`;
+      case 'MACHINING':
+        return `${base} bg-yellow-100 text-yellow-700`;
+      case 'INSPECTION':
+        return `${base} bg-blue-100 text-blue-700`;
+      case 'COMPLETED':
+        return `${base} bg-emerald-100 text-emerald-700`;
+      default:
+        return `${base} bg-gray-100 text-gray-700`;
+    }
+  };
+
+  // Handle file selection
+  const handleFileChange = (e) => {
+    setAttachment(e.target.files[0]);
+  };
+
+  // Fetch status history
+  useEffect(() => {
+    const fetchStatusHistory = async () => {
+      try {
+        setLoadingHistory(true);
+        const orderId = order.id.replace('SF', '');
+        
+        // Get token from localStorage
+        const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
+        const token = authData?.token;
+        
+        const response = await fetch(`http://localhost:8080/status/order/${orderId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          setStatusHistory(data);
+        }
+      } catch (error) {
+        console.error('Error fetching status history:', error);
+      } finally {
+        setLoadingHistory(false);
+      }
+    };
+    
+    fetchStatusHistory();
+  }, [order.id]);
+
+  // Handle form submission
+  const handleSubmitStatus = async (e) => {
+    e.preventDefault();
+    if (!newStatus) {
+      setSubmitError('Please select a status');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError('');
+
+    try {
+      // Create FormData object for multipart request
+      const formData = new FormData();
+      
+      // Create status request object
+      const statusRequest = {
+        newStatus: newStatus.toUpperCase(),
+        comment: comment || ''
+      };
+      
+      // Append status request as JSON string
+      formData.append('status', new Blob([JSON.stringify(statusRequest)], {
+        type: 'application/json'
+      }));
+      
+      // Append attachment if provided
+      if (attachment) {
+        formData.append('attachment', attachment);
+      }
+
+      // Extract order ID from order.id (remove 'SF' prefix)
+      const orderId = order.id.replace('SF', '');
+      
+      // Get token from localStorage
+      const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
+      const token = authData?.token;
+      
+      // Make API call with authorization header
+      const response = await fetch(`http://localhost:8080/status/create/${orderId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update status');
+      }
+
+      // Reset form
+      setNewStatus('');
+      setComment('');
+      setAttachment(null);
+      toast.success('Status updated successfully!');
+
+      // Immediately refresh status history so the UI shows the latest entry
+      try {
+        const historyResponse = await fetch(`http://localhost:8080/status/order/${orderId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (historyResponse.ok) {
+          const latestHistory = await historyResponse.json();
+          setStatusHistory(latestHistory);
+        }
+      } catch (historyError) {
+        console.error('Error refreshing status history after update:', historyError);
+      }
+      
+      // Notify parent to refresh order data
+      if (onUpdateOrder) {
+        onUpdateOrder(order.id.replace('SF', ''), newStatus);
+      }
+    } catch (error) {
+      console.error('Error updating status:', error);
+      setSubmitError('Failed to update status. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/20 z-50">
       <div className="absolute inset-y-0 right-0 w-full lg:w-4/5 bg-gray-50 shadow-xl overflow-y-auto">
@@ -20,6 +174,52 @@ function DetailsPanel({ order, onClose }) {
           </div>
           <button onClick={onClose} className="px-3 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100">Close</button>
         </div>
+        
+        {/* Attachment Modal */}
+        {selectedAttachment && (
+          <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4">
+            <div className="relative max-w-4xl w-full max-h-[90vh] bg-white rounded-lg overflow-hidden">
+              <div className="absolute top-4 right-4 flex gap-2">
+                <a 
+                  href={selectedAttachment} 
+                  download 
+                  className="px-3 py-1.5 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
+                >
+                  Download
+                </a>
+                <button 
+                  onClick={() => setSelectedAttachment(null)}
+                  className="px-3 py-1.5 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
+                >
+                  Close
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-center h-full p-4">
+                {selectedAttachment.match(/\.(jpg|jpeg|png|gif)$/i) ? (
+                  <img 
+                    src={selectedAttachment} 
+                    alt="Attachment" 
+                    className="max-w-full max-h-[80vh] object-contain"
+                  />
+                ) : (
+                  <div className="text-center p-8">
+                    <div className="text-4xl mb-4">📄</div>
+                    <p className="text-lg text-gray-700 mb-2">File Preview Unavailable</p>
+                    <p className="text-gray-500 mb-4">This file type cannot be previewed directly.</p>
+                    <a 
+                      href={selectedAttachment} 
+                      download 
+                      className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+                    >
+                      Download File
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Progress */}
         <div className="m-4 rounded-2xl border border-indigo-50 bg-gradient-to-r from-white via-slate-50 to-indigo-50 px-6 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
@@ -74,14 +274,13 @@ function DetailsPanel({ order, onClose }) {
                     const baseColor = isCompleted || isCurrent ? 'text-indigo-600' : 'text-gray-400';
 
                     return (
-                      <div key={step} className="flex flex-col items-center text-center flex-1 min-w-0">
+                      <div key={step.key} className="flex flex-col items-center text-center flex-1 min-w-0">
                         <div
                           className={`mb-1 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] transition-all duration-200
-                          ${isCompleted ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : ''}
-                          ${isCurrent && !isCompleted ? 'border-indigo-500 text-indigo-600 bg-white shadow-[0_0_0_3px_rgba(129,140,248,0.25)] scale-105' : ''}
+                          ${(isCompleted || isCurrent) ? 'bg-indigo-600 border-indigo-600 text-white shadow-md' : ''}
                           ${!isCompleted && !isCurrent ? 'border-slate-300 text-slate-400 bg-white' : ''}`}
                         >
-                          {isCompleted ? '✓' : '•'}
+                          {(isCompleted || isCurrent) ? '✓' : '•'}
                         </div>
                         <div className={`text-[11px] font-medium whitespace-nowrap ${baseColor}`}>
                           {step.label}
@@ -145,35 +344,129 @@ function DetailsPanel({ order, onClose }) {
                   </div>
                 </div>
               </div>
-
             </section>
 
             <section className="bg-white border border-gray-200 rounded-lg p-4">
               <h3 className="font-semibold text-black mb-3">Update Order Status</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <select className="border border-gray-200 rounded-md px-2 py-2 text-sm">
-                  <option>Select next status...</option>
-                  {['Inquiry','Design','Production','Machining','Inspection','Completed'].map(s => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </select>
-                <div>
-                  <input type="file" className="block w-full text-sm text-gray-600" />
+              {submitError && (
+                <div className="mb-3 p-2 bg-red-50 text-red-700 text-sm rounded">
+                  {submitError}
                 </div>
-                <div className="sm:col-span-2">
-                  <textarea placeholder="Add comments about the status change..." className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm min-h-[90px] text-black" />
+              )}
+              <form onSubmit={handleSubmitStatus}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-black mb-1">New Status</label>
+                    <select 
+                      value={newStatus}
+                      onChange={(e) => setNewStatus(e.target.value)}
+                      className="w-full border border-gray-200 rounded-md px-2 py-2 text-sm"
+                      disabled={isSubmitting}
+                    >
+                      <option value="">Select next status...</option>
+                      {['Enquiry','Design','Production','Machining','Inspection','Completed'].map(s => (
+                        <option key={s} value={s.toUpperCase()}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-black mb-1">Attachment (Optional)</label>
+                    <input 
+                      type="file" 
+                      onChange={handleFileChange}
+                      className="block w-full text-sm text-gray-600 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200" 
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-black mb-1">Comments</label>
+                    <textarea 
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                      placeholder="Add comments about the status change..." 
+                      className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm min-h-[90px] text-black" 
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <button 
+                      type="submit"
+                      disabled={isSubmitting}
+                      className={`bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-md ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {isSubmitting ? 'Updating...' : 'Update Status'}
+                    </button>
+                  </div>
                 </div>
-                <div className="sm:col-span-2">
-                  <button className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-md">Update Status</button>
-                </div>
-              </div>
+              </form>
             </section>
 
             <section className="bg-white border border-gray-200 rounded-lg p-4">
-              <h3 className="font-semibold text-black mb-2">Status History</h3>
-              <div className="border border-dashed border-gray-300 rounded-md p-8 text-center text-gray-500">
-                No History
+              <div className="mb-2">
+                <h3 className="font-semibold text-black">Status History</h3>
+                <p className="text-xs text-gray-500 mt-0.5">A log of all status changes for this order.</p>
               </div>
+              {loadingHistory ? (
+                <div className="border border-dashed border-gray-300 rounded-md p-8 text-center text-gray-500">
+                  Loading history...
+                </div>
+              ) : statusHistory.length > 0 ? (
+                <div className="space-y-5">
+                  {statusHistory.map((status) => {
+                    const fileName = status.attachmentUrl
+                      ? status.attachmentUrl.split('/').pop()
+                      : '';
+
+                    return (
+                      <div key={status.id} className="flex items-start justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className="h-9 w-9 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
+                            <span className="text-xs font-semibold text-gray-700">AU</span>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900 mb-1">Admin User</p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={getStatusBadgeClasses(status.oldStatus)}>
+                                {status.oldStatus || '—'}
+                              </span>
+                              <span className="text-gray-400 text-xs">
+                                →
+                              </span>
+                              <span className={getStatusBadgeClasses(status.newStatus)}>
+                                {status.newStatus || '—'}
+                              </span>
+                            </div>
+                            {status.comment && (
+                              <p className="text-sm text-gray-700 mb-2">{status.comment}</p>
+                            )}
+                            {status.attachmentUrl && (
+                              <div className="mt-1 space-y-1">
+                                <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wide">
+                                  <span className="text-[13px]">Paperclip</span>
+                                  <span>Attachments</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedAttachment(status.attachmentUrl)}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-100 text-xs text-gray-800 hover:bg-gray-200 border border-gray-200"
+                                >
+                                  <span>Download</span>
+                                  <span className="truncate max-w-[160px] text-left">{fileName || 'Download attachment'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 whitespace-nowrap mt-1">{status.createdAt}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="border border-dashed border-gray-300 rounded-md p-8 text-center text-gray-500">
+                  No History
+                </div>
+              )}
             </section>
           </div>
 
@@ -222,10 +515,11 @@ export default function DashboardPage() {
   const [error, setError] = useState(null);
   const [form, setForm] = useState({ customer: '', products: '', custom: '', units: '', material: '', dept: '' });
   const [formError, setFormError] = useState(''); // Add state for form error message
-  
+  const [departmentCounts, setDepartmentCounts] = useState([]);
+
   // Fetch customers and products for the create order modal
   const { customerData, productData, loading: customerProductLoading } = useCustomerProductData();
-  
+
   // Fetch orders data
   const fetchOrders = async () => {
     try {
@@ -233,7 +527,7 @@ export default function DashboardPage() {
       setError(null);
       const orders = await orderApi.getAllOrders();
       console.log('Orders data:', orders);
-      
+
       // Transform the API response to match the table structure
       const transformedOrders = orders.map(order => {
         // Format the date to "27 Nov 2025" format
@@ -249,13 +543,13 @@ export default function DashboardPage() {
             }
           }
         }
-        
+
         // Map department to match the badge styling
         let department = 'ENQUIRY'; // Default
         if (order.department) {
           department = order.department;
         }
-        
+
         return {
           id: `SF${order.orderId}`,
           customer: order.customers && order.customers.length > 0 
@@ -273,7 +567,7 @@ export default function DashboardPage() {
           customers: order.customers || [] // Preserve the full customers array for the details panel
         };
       });
-      
+
       setRows(transformedOrders);
     } catch (err) {
       console.error('Error fetching orders:', err);
@@ -282,9 +576,79 @@ export default function DashboardPage() {
       setLoading(false);
     }
   };
-  
+
   useEffect(() => {
     fetchOrders();
+  }, []);
+
+  useEffect(() => {
+    const fetchDepartmentCounts = async () => {
+      try {
+        // Get token from localStorage
+        const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
+        const token = authData?.token;
+
+        const response = await fetch('http://localhost:8080/order/getCountByDepartment', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) return;
+
+        const data = await response.json();
+
+        const barColorMap = {
+          DESIGN: 'fill-orange-400',
+          PRODUCTION: 'fill-green-500',
+          INSPECTION: 'fill-yellow-400',
+          MACHINING: 'fill-blue-500',
+          COMPLETED: 'fill-gray-400',
+          ENQUIRY: 'fill-purple-500',
+        };
+
+        const pieColorMap = {
+          DESIGN: '#f97316',     // orange-500
+          PRODUCTION: '#22c55e', // green-500
+          INSPECTION: '#eab308', // yellow-500
+          MACHINING: '#3b82f6',  // blue-500
+          COMPLETED: '#6b7280',  // gray-500
+          ENQUIRY: '#a855f7',    // purple-500
+        };
+
+        const labelMap = {
+          DESIGN: 'Design',
+          PRODUCTION: 'Production',
+          INSPECTION: 'Inspection',
+          MACHINING: 'Machining',
+          COMPLETED: 'Completed',
+          ENQUIRY: 'Inquiry',
+        };
+
+        const order = ['DESIGN', 'PRODUCTION', 'INSPECTION', 'MACHINING', 'COMPLETED', 'ENQUIRY'];
+
+        const mapped = Array.isArray(data)
+          ? data
+              .map((item) => {
+                const key = (item.departmentName || '').toUpperCase().trim();
+                return {
+                  key,
+                  label: labelMap[key] || key || 'Unknown',
+                  value: item.orderCount ?? 0,
+                  barColor: barColorMap[key] || 'fill-gray-300',
+                  pieColor: pieColorMap[key] || '#9ca3af',
+                };
+              })
+              .sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))
+          : [];
+
+        setDepartmentCounts(mapped);
+      } catch (err) {
+        console.error('Error fetching department counts:', err);
+      }
+    };
+
+    fetchDepartmentCounts();
   }, []);
 
   // Log any errors
@@ -303,7 +667,7 @@ export default function DashboardPage() {
     try {
       // Clear any previous error
       setFormError('');
-      
+
       // Validate required fields
       if (!form.customer || !form.products || !form.dept) {
         const errorMessage = 'Please select customer, product, and department';
@@ -376,7 +740,7 @@ export default function DashboardPage() {
             <p className="text-sm text-black mb-4">
               A breakdown of all orders by their current status.
             </p>
-            <BarChart />
+            <BarChart data={departmentCounts} />
           </div>
 
           <div className="bg-white border border-gray-200 rounded-lg p-4">
@@ -387,11 +751,18 @@ export default function DashboardPage() {
             <p className="text-sm text-black mb-4">
               Distribution of active orders across departments.
             </p>
-            <DonutChart />
+            <DonutChart data={departmentCounts} />
+
             <div className="flex gap-6 justify-center mt-4 text-xs text-black">
-              <LegendDot color="bg-orange-500" label="Design" />
-              <LegendDot color="bg-blue-500" label="Machining" />
-              <LegendDot color="bg-yellow-400" label="Inspection" />
+              {departmentCounts.map((department) => (
+                <div key={department.key} className="flex items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: department.pieColor }}
+                  />
+                  <span>{department.label}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -432,7 +803,26 @@ export default function DashboardPage() {
         </div>
         {/* Details Panel */}
         {selectedOrder && (
-          <DetailsPanel order={selectedOrder} onClose={() => setSelectedOrder(null)} />
+          <DetailsPanel 
+            order={selectedOrder} 
+            onClose={() => setSelectedOrder(null)}
+            onUpdateOrder={(orderId, newStatus) => {
+              // Update the selected order's department
+              setSelectedOrder(prev => ({
+                ...prev,
+                department: newStatus
+              }));
+              
+              // Also update in the rows list
+              setRows(prevRows => 
+                prevRows.map(row => 
+                  row.id === `SF${orderId}` 
+                    ? { ...row, department: newStatus } 
+                    : row
+                )
+              );
+            }}
+          />
         )}
 
         {/* Create Order Modal */}
@@ -581,17 +971,27 @@ function LegendDot({ color, label }) {
   );
 }
 
-function BarChart() {
-  // simple bar visualization using SVG
-  const bars = [
-    { label: 'Inquiry', value: 4, color: 'fill-orange-400' },
-    { label: 'Design', value: 4, color: 'fill-blue-500' },
-    { label: 'Machining', value: 4, color: 'fill-yellow-400' },
-    { label: 'Inspection', value: 4, color: 'fill-emerald-500' },
-    { label: 'Completed', value: 0.5, color: 'fill-gray-200' },
+function BarChart({ data }) {
+  // If no data yet, fall back to default placeholders
+  const fallback = [
+    { label: 'Inquiry', value: 0, color: 'fill-purple-500' },
+    { label: 'Design', value: 0, color: 'fill-orange-400' },
+    { label: 'Production', value: 0, color: 'fill-green-500' },
+    { label: 'Machining', value: 0, color: 'fill-blue-500' },
+    { label: 'Inspection', value: 0, color: 'fill-yellow-400' },
+    { label: 'Completed', value: 0, color: 'fill-gray-400' },
   ];
 
-  const max = Math.max(...bars.map((b) => b.value)) || 1;
+  const bars = (data && data.length
+    ? data.map((d) => ({
+        label: d.label,
+        value: d.value,
+        color: d.barColor || 'fill-gray-300',
+      }))
+    : fallback);
+
+  const maxValue = Math.max(...bars.map((b) => b.value)) || 1;
+  const maxTick = Math.max(4, maxValue); // ensure at least 0-4 scale
 
   return (
     <div className="h-64">
@@ -599,15 +999,51 @@ function BarChart() {
         {/* axes */}
         <line x1="40" y1="10" x2="40" y2="200" stroke="#e5e7eb" strokeWidth="2" />
         <line x1="40" y1="200" x2="480" y2="200" stroke="#e5e7eb" strokeWidth="2" />
+
+        {/* Y-axis ticks and grid lines */}
+        {Array.from({ length: maxTick + 1 }).map((_, v) => {
+          const y = 200 - (v / maxTick) * 160;
+          return (
+            <g key={v}>
+              {/* grid line, skip bottom axis (v === 0) */}
+              {v !== 0 && (
+                <line
+                  x1="40"
+                  y1={y}
+                  x2="480"
+                  y2={y}
+                  stroke="#e5e7eb"
+                  strokeWidth="1"
+                  strokeDasharray="2 4"
+                />
+              )}
+              {/* tick label */}
+              <text
+                x="30"
+                y={y + 4}
+                textAnchor="end"
+                className="fill-gray-400"
+                fontSize="9"
+              >
+                {v}
+              </text>
+            </g>
+          );
+        })}
+
         {bars.map((b, idx) => {
-          const bw = 70;
-          const gap = 15;
+          const bw = 65;  // bar width
+          const gap = 10; // space between bars
           const x = 50 + idx * (bw + gap);
-          const h = (b.value / max) * 160;
+
+          const h = (b.value / maxTick) * 160;
+
           const y = 200 - h;
           return (
             <g key={b.label}>
-              <rect x={x} y={y} width={bw} height={h} className={b.color} rx="6" />
+              <rect x={x} y={y} width={bw} height={h} className={b.color} rx="6">
+                <title>{`${b.label}: ${b.value} orders`}</title>
+              </rect>
               <text x={x + bw / 2} y="215" textAnchor="middle" className="fill-black" fontSize="10">
                 {b.label}
               </text>
@@ -619,14 +1055,24 @@ function BarChart() {
   );
 }
 
-function DonutChart() {
+function DonutChart({ data }) {
   // simple donut visualization using SVG
-  const segments = [
-    { label: 'Design', value: 45, color: '#f97316' }, // orange-500
-    { label: 'Machining', value: 35, color: '#3b82f6' }, // blue-500
-    { label: 'Inspection', value: 20, color: '#facc15' }, // yellow-400
+  const fallback = [
+    { label: 'Design', value: 0, color: '#f97316' },
+    { label: 'Machining', value: 0, color: '#3b82f6' },
+    { label: 'Inspection', value: 0, color: '#facc15' },
   ];
-  const total = segments.reduce((a, b) => a + b.value, 0);
+
+  const segments = (data && data.length
+    ? data.map((d) => ({
+        label: d.label,
+        value: d.value,
+        color: d.pieColor || '#e5e7eb',
+      }))
+    : fallback);
+
+  const total = segments.reduce((a, b) => a + b.value, 0) || 1;
+
   const radius = 70;
   const cx = 130;
   const cy = 100;
@@ -648,14 +1094,16 @@ function DonutChart() {
     ].join(' ');
 
     startAngle = endAngle;
-    return { d, color: s.color };
+    return { d, color: s.color, label: s.label, value: s.value };
   });
 
   return (
     <div className="h-64 flex items-center justify-center">
       <svg viewBox="0 0 260 200" className="w-full h-full max-w-md">
         {arcs.map((a, i) => (
-          <path key={i} d={a.d} fill={a.color} opacity="0.9" />
+          <path key={i} d={a.d} fill={a.color} opacity="0.9">
+            <title>{`${a.label}: ${a.value} orders`}</title>
+          </path>
         ))}
         <circle cx={cx} cy={cy} r={40} fill="white" />
       </svg>
