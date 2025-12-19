@@ -41,21 +41,21 @@ public class OrderController {
     }
 
     @GetMapping("/getAll")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','DESIGN')")
     public ResponseEntity<List<OrderResponse>> getAllOrders() {
         List<OrderResponse> response = orderService.getAllOrders();
         return ResponseEntity.ok(response);
     }
 
     @GetMapping("/getByDepartment/{department}")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','DESIGN')")
     public ResponseEntity<List<OrderResponse>> getOrdersByDepartment(@PathVariable String department) {
         List<OrderResponse> response = orderService.getOrdersByDepartment(department);
         return ResponseEntity.ok(response);
     }
 
     @GetMapping("/getCountByDepartment")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','DESIGN')")
     public ResponseEntity<List<DepartmentOrderCountResponse>> getOrderCountByDepartment() {
         List<DepartmentOrderCountResponse> response = orderService.getOrderCountByDepartment();
         return ResponseEntity.ok(response);
