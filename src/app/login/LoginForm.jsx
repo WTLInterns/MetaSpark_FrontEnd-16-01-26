@@ -78,22 +78,30 @@ export default function LoginForm() {
 
       console.log('Login response roles:', data.roles, 'normalized:', normalizedRole);
 
-      let redirectPath = '/login';
+      let redirectPath = '/';
       switch (normalizedRole) {
         case 'ADMIN':
           redirectPath = '/AdminUser/dashboard';
           break;
-        case 'DESIGNER':
+        case 'DESIGN':
           redirectPath = '/DesignUser/dashboard';
           break;
-        case 'MACHINIST':
+        case 'MACHINING':
           redirectPath = '/MechanistUser/dashboard';
           break;
-        case 'INSPECTOR':
+        case 'INSPECTION':
           redirectPath = '/InspectionUser/dashboard';
           break;
         case 'PRODUCTION':
           redirectPath = '/ProductionUser/dashboard';
+          break;
+        case 'ENQUIRY':
+          // For ENQUIRY role, we can redirect to Admin dashboard or a specific enquiry dashboard
+          redirectPath = '/AdminUser/dashboard';
+          break;
+        case 'COMPLETED':
+          // For COMPLETED role, we can redirect to Admin dashboard
+          redirectPath = '/AdminUser/dashboard';
           break;
         default:
           redirectPath = '/login';

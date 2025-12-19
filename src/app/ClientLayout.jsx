@@ -21,9 +21,14 @@ export default function ClientLayout({ children }) {
         localStorage.removeItem('swiftflow-user');
         localStorage.removeItem('swiftflow-token');
         localStorage.removeItem('auth-token');
+        // Also update the user state to null
+        setUser(null);
       }
     } finally {
+      // Use router.push to navigate to login page
       router.push('/');
+      // Also close the user menu
+      setShowUserMenu(false);
     }
   };
 
@@ -173,7 +178,11 @@ export default function ClientLayout({ children }) {
                         Settings
                       </a>
                       <button
-                        onClick={handleLogout}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleLogout();
+                        }}
                         className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
                         role="menuitem"
                         tabIndex="-1"
@@ -248,7 +257,11 @@ export default function ClientLayout({ children }) {
                       Settings
                     </a>
                     <button
-                      onClick={handleLogout}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleLogout();
+                      }}
                       className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
                       role="menuitem"
                       tabIndex="-1"

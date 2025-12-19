@@ -1,44 +1,99 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { getAllCommunications, addCommunication, markAsRead } from './api';
 
 export default function MechanistCommunications() {
   const [activeTab, setActiveTab] = useState('inbox');
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ dept: '', orderId: '', priority: 'Medium', body: '' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   
-  const [inbox, setInbox] = useState([
-    { id: '1', dept: 'Design', orderId: 'SF1005', priority: 'High', read: false, timestamp: '2025-11-20 10:30 AM', body: 'New design specifications available for Voight-Kampff sensors. Please review before starting machining.' },
-    { id: '2', dept: 'Production', orderId: 'SF1006', priority: 'Medium', read: false, timestamp: '2025-11-20 09:15 AM', body: 'Material shipment has arrived for custom brackets. Ready for machining process.' },
-    { id: '3', dept: 'Inspection', orderId: 'SF1004', priority: 'Low', read: true, timestamp: '2025-11-19 04:45 PM', body: 'Previous batch passed quality inspection. Documentation uploaded.' },
-  ]);
+  const [inbox, setInbox] = useState([]);
+  const [sent, setSent] = useState([]);
 
-  const [sent, setSent] = useState([
-    { id: '4', dept: 'Production', orderId: 'SF1005', priority: 'High', read: true, timestamp: '2025-11-20 11:00 AM', body: 'Machining completed for SF1005. Ready for inspection phase.' },
-    { id: '5', dept: 'Design', orderId: 'SF1006', priority: 'Medium', read: true, timestamp: '2025-11-19 03:30 PM', body: 'Technical clarification needed on tolerance specifications for custom brackets.' },
-  ]);
+  // Fetch communications when component mounts
+  useEffect(() => {
+    fetchCommunications();
+  }, []);
 
-  const createMessage = () => {
-    const options = { month: 'short', day: '2-digit', year: 'numeric' };
-    const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    const dateStr = `${new Date().toLocaleDateString('en-US', options)} at ${time}`;
-    const newMsg = { 
-      id: Date.now().toString(), 
-      dept: form.dept, 
-      orderId: form.orderId || '', 
-      priority: form.priority, 
-      read: false, 
-      timestamp: dateStr, 
-      body: form.body.trim() 
-    };
-    setSent(prev => [newMsg, ...prev]);
-    setShowModal(false);
-    setForm({ dept: '', orderId: '', priority: 'Medium', body: '' });
-    setActiveTab('sent');
+  const fetchCommunications = async () => {
+    try {
+      setLoading(true);
+      const data = await getAllCommunications();
+      // Convert backend response to frontend format
+      const formattedMessages = data.map(msg => ({
+        id: `${msg.id}`,
+        dept: msg.department,
+        orderId: '', // Not provided in backend
+        priority: msg.priority || 'Medium',
+        read: msg.isRead === '1',
+        timestamp: `${msg.date} at ${msg.time}`,
+        body: msg.message
+      }));
+      setInbox(formattedMessages.filter(msg => msg.read === false));
+      setSent(formattedMessages.filter(msg => msg.read === true));
+      setError('');
+    } catch (err) {
+      console.error('Error fetching communications:', err);
+      setError('Failed to load communications');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const markAsRead = (msgId) => {
-    setInbox(prev => prev.map(msg => msg.id === msgId ? { ...msg, read: true } : msg));
+  const createMessage = async () => {
+    if (!form.dept || !form.body.trim()) return;
+    
+    try {
+      setLoading(true);
+      
+      const communicationData = {
+        department: form.dept,
+        message: form.body.trim(),
+        priority: form.priority
+      };
+      
+      await addCommunication(communicationData);
+      
+      // Reset form and close modal
+      setShowModal(false);
+      setForm({ dept: '', orderId: '', priority: 'Medium', body: '' });
+      setActiveTab('sent');
+      
+      // Refresh the communications list
+      await fetchCommunications();
+      setError('');
+    } catch (err) {
+      console.error('Error sending message:', err);
+      setError('Failed to send message');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMarkAsRead = async (msgId) => {
+    try {
+      setLoading(true);
+      // Find the message to get its data
+      const message = inbox.find(msg => msg.id === msgId);
+      if (message) {
+        await markAsRead(msgId, {
+          department: message.dept,
+          message: message.body,
+          priority: message.priority
+        });
+        // Update the local state
+        setInbox(prev => prev.map(msg => msg.id === msgId ? { ...msg, read: true } : msg));
+      }
+      setError('');
+    } catch (err) {
+      console.error('Error marking message as read:', err);
+      setError('Failed to mark message as read');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -52,10 +107,22 @@ export default function MechanistCommunications() {
                 <h1 className="text-2xl font-bold text-gray-900">Communications Center</h1>
                 <p className="text-sm text-gray-600 mt-1">Send and receive messages with production teams</p>
               </div>
-              <button onClick={() => setShowModal(true)} className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-md">
+              <button 
+                onClick={() => setShowModal(true)} 
+                disabled={loading}
+                className={`inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-md ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+              >
                 <span>＋</span> New Message
               </button>
             </div>
+            
+            {/* Loading and Error Messages */}
+            {loading && (
+              <div className="mt-4 text-center text-gray-600">Loading communications...</div>
+            )}
+            {error && (
+              <div className="mt-4 text-center text-red-600 bg-red-50 p-2 rounded-md">{error}</div>
+            )}
           </div>
 
           {/* Tabs */}
@@ -94,7 +161,7 @@ export default function MechanistCommunications() {
               <div 
                 key={msg.id} 
                 className={`p-6 hover:bg-gray-50 cursor-pointer ${!msg.read ? 'bg-blue-50' : ''}`}
-                onClick={() => markAsRead(msg.id)}
+                onClick={() => handleMarkAsRead(msg.id)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -183,9 +250,9 @@ export default function MechanistCommunications() {
                       className="w-full border border-gray-200 rounded-md px-3 py-2"
                     >
                       <option value="">Select department...</option>
-                      <option value="Design">Design</option>
-                      <option value="Production">Production</option>
-                      <option value="Inspection">Inspection</option>
+                      <option value="DESIGN">Design</option>
+                      <option value="PRODUCTION">Production</option>
+                      <option value="INSPECTION">Inspection</option>
                     </select>
                   </div>
                   <div>
@@ -224,16 +291,17 @@ export default function MechanistCommunications() {
                 <div className="p-6 border-t border-gray-200 flex justify-end gap-3">
                   <button 
                     onClick={() => setShowModal(false)}
-                    className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                    disabled={loading}
+                    className={`px-4 py-2 rounded-md ${loading ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
                   >
                     Cancel
                   </button>
                   <button 
                     onClick={createMessage}
-                    disabled={!form.dept || !form.body.trim()}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+                    disabled={!form.dept || !form.body.trim() || loading}
+                    className={`px-4 py-2 rounded-md ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'} disabled:opacity-50`}
                   >
-                    Send Message
+                    {loading ? 'Sending...' : 'Send Message'}
                   </button>
                 </div>
               </div>

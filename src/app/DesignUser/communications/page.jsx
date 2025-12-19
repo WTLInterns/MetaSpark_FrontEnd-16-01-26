@@ -1,45 +1,49 @@
 
 
 'use client';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { getAllCommunications, addCommunication, markAsRead } from './api';
 
 export default function CommunicationsPage() {
   const [activeTab, setActiveTab] = useState('inbox'); // inbox | sent
   const [showModal, setShowModal] = useState(false);
   const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const [inbox, setInbox] = useState([
-    {
-      id: 'MSG-201',
-      dept: 'Machining',
-      orderId: 'SF1002',
-      priority: 'High',
-      read: false,
-      timestamp: 'Nov 19, 2025 at 12:25 PM',
-      body: 'URGENT: Issue with tolerance on arc reactor casings for #SF1002. Need immediate inspection before proceeding.'
-    },
-    {
-      id: 'MSG-200',
-      dept: 'Design',
-      orderId: 'SF1004',
-      priority: 'High',
-      read: false,
-      timestamp: 'Nov 19, 2025 at 7:25 AM',
-      body: 'The prototype material for #SF1004 is proving difficult to machine. We may need to reconsider the alloy.'
-    },
-    {
-      id: 'MSG-199',
-      dept: 'Design',
-      orderId: 'SF1003',
-      priority: 'Medium',
-      read: false,
-      timestamp: 'Nov 18, 2025 at 5:15 PM',
-      body: 'Requesting feedback on the revised drawings for #SF1003 before sending to production.'
-    }
-  ]);
+  const [inbox, setInbox] = useState([]);
   const [sent, setSent] = useState([]);
 
   const [form, setForm] = useState({ dept: '', orderId: '', priority: 'Medium', body: '' });
+
+  // Fetch communications when component mounts
+  useEffect(() => {
+    fetchCommunications();
+  }, []);
+
+  const fetchCommunications = async () => {
+    try {
+      setLoading(true);
+      const data = await getAllCommunications();
+      // Convert backend response to frontend format
+      const formattedMessages = data.map(msg => ({
+        id: `MSG-${msg.id}`,
+        dept: msg.department,
+        orderId: '', // Not provided in backend
+        priority: msg.priority || 'Medium',
+        read: msg.isRead === '1',
+        timestamp: `${msg.date} at ${msg.time}`,
+        body: msg.message
+      }));
+      setInbox(formattedMessages);
+      setError('');
+    } catch (err) {
+      console.error('Error fetching communications:', err);
+      setError('Failed to load communications');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const list = activeTab === 'inbox' ? inbox : sent;
   const filtered = useMemo(() => {
@@ -52,22 +56,57 @@ export default function CommunicationsPage() {
     p === 'High' ? 'bg-red-100 text-red-700' : p === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-700'
   );
 
-  const markAsRead = (id) => {
-    setInbox(prev => prev.map(m => m.id === id ? { ...m, read: true } : m));
+  const handleMarkAsRead = async (id) => {
+    try {
+      setLoading(true);
+      // Find the message to get its data
+      const message = inbox.find(m => m.id === id);
+      if (message) {
+        await markAsRead(id, {
+          department: message.dept,
+          message: message.body,
+          priority: message.priority
+        });
+        // Update the local state
+        setInbox(prev => prev.map(m => m.id === id ? { ...m, read: true } : m));
+      }
+      setError('');
+    } catch (err) {
+      console.error('Error marking message as read:', err);
+      setError('Failed to mark message as read');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const createMessage = () => {
+  const createMessage = async () => {
     if (!form.dept || !form.body.trim()) return;
-    const currentMax = Math.max(200, ...[...inbox, ...sent].map(m => Number(String(m.id).replace(/\D/g, '')) || 0));
-    const id = `MSG-${currentMax + 1}`;
-    const options = { month: 'short', day: '2-digit', year: 'numeric' };
-    const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    const dateStr = `${new Date().toLocaleDateString('en-US', options)} at ${time}`;
-    const newMsg = { id, dept: form.dept, orderId: form.orderId || '', priority: form.priority, read: false, timestamp: dateStr, body: form.body.trim() };
-    setInbox(prev => [newMsg, ...prev]);
-    setShowModal(false);
-    setForm({ dept: '', orderId: '', priority: 'Medium', body: '' });
-    setActiveTab('inbox');
+    
+    try {
+      setLoading(true);
+      
+      const communicationData = {
+        department: form.dept,
+        message: form.body.trim(),
+        priority: form.priority
+      };
+      
+      await addCommunication(communicationData);
+      
+      // Reset form and close modal
+      setShowModal(false);
+      setForm({ dept: '', orderId: '', priority: 'Medium', body: '' });
+      setActiveTab('inbox');
+      
+      // Refresh the communications list
+      await fetchCommunications();
+      setError('');
+    } catch (err) {
+      console.error('Error sending message:', err);
+      setError('Failed to send message');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -77,10 +116,22 @@ export default function CommunicationsPage() {
           <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Communications Center</h1>
           <p className="text-sm text-gray-600 mt-1">Send and receive messages between departments.</p>
         </div>
-        <button onClick={() => setShowModal(true)} className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-md">
+        <button 
+          onClick={() => setShowModal(true)} 
+          disabled={loading}
+          className={`inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-md ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+        >
           <span>＋</span> New Message
         </button>
       </div>
+      
+      {/* Loading and Error Messages */}
+      {loading && (
+        <div className="mt-4 text-center text-gray-600">Loading communications...</div>
+      )}
+      {error && (
+        <div className="mt-4 text-center text-red-600 bg-red-50 p-2 rounded-md">{error}</div>
+      )}
 
       {/* Tabs + Search */}
       <div className="mt-5 flex flex-col lg:flex-row lg:items-center gap-3">
@@ -107,7 +158,7 @@ export default function CommunicationsPage() {
                 <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                   <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${priorityPill(item.priority)}`}>{item.priority}</span>
                   {activeTab==='inbox' && !item.read && (
-                    <button onClick={() => markAsRead(item.id)} className="text-xs font-medium px-3 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Mark as Read</button>
+                    <button onClick={() => handleMarkAsRead(item.id)} className="text-xs font-medium px-3 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Mark as Read</button>
                   )}
                 </div>
               </div>
@@ -136,10 +187,10 @@ export default function CommunicationsPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
                     <select value={form.dept} onChange={(e)=>setForm(f=>({...f, dept:e.target.value}))} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
                       <option value="">Select department...</option>
-                      <option value="Design">Design</option>
-                      <option value="Machining">Machining</option>
-                      <option value="Production">Production</option>
-                      <option value="Inspection">Inspection</option>
+                      <option value="DESIGN">Design</option>
+                      <option value="MACHINING">Machining</option>
+                      <option value="PRODUCTION">Production</option>
+                      <option value="INSPECTION">Inspection</option>
                     </select>
                   </div>
                   <div>
@@ -162,8 +213,22 @@ export default function CommunicationsPage() {
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-3 p-4 border-top border-gray-200">
-                  <button type="button" onClick={()=>setShowModal(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-md">Cancel</button>
-                  <button type="button" onClick={createMessage} className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white">Send Message</button>
+                  <button 
+                    type="button" 
+                    onClick={()=>setShowModal(false)} 
+                    disabled={loading}
+                    className={`px-4 py-2 text-sm rounded-md ${loading ? 'bg-gray-200 text-gray-500 cursor-not-allowed' : 'border border-gray-300'}`}
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={createMessage} 
+                    disabled={loading}
+                    className={`px-4 py-2 text-sm rounded-md ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 text-white'}`}
+                  >
+                    {loading ? 'Sending...' : 'Send Message'}
+                  </button>
                 </div>
               </div>
             </div>
