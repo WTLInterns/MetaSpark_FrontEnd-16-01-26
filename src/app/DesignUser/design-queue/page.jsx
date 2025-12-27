@@ -727,21 +727,52 @@ export default function DesignQueuePage() {
 
                       try {
                         setIsGenerating(true);
-                        const res = await fetch(`http://localhost:8080/pdf/order/${numericId}/selection`, {
+                        // 1) Persist Designer checkbox selection only
+                        const selRes = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
                           method: 'POST',
                           headers: {
                             'Content-Type': 'application/json',
                             Authorization: `Bearer ${token}`,
                           },
                           body: JSON.stringify({
-                            selectedRowIds: selectedSubnestRowNos.map(String),
-                            attachmentUrl: pdfModalUrl,
+                            designerSelectedRowIds: selectedSubnestRowNos.map(String),
                           }),
                         });
-                        if (!res.ok) {
+                        if (!selRes.ok) {
                           let msg = 'Failed to save selection';
                           try {
-                            const data = await res.json();
+                            const data = await selRes.json();
+                            if (data && data.message) msg = data.message;
+                          } catch {}
+                          setToast({ message: msg, type: 'error' });
+                          return;
+                        }
+
+                        // 2) Move order from DESIGN to PRODUCTION via status API
+                        const statusPayload = {
+                          newStatus: 'PRODUCTION',
+                          comment: 'Design selection saved and sent to Production',
+                          percentage: null,
+                          attachmentUrl: pdfModalUrl,
+                        };
+                        const formData = new FormData();
+                        formData.append(
+                          'status',
+                          new Blob([JSON.stringify(statusPayload)], { type: 'application/json' })
+                        );
+
+                        const statusRes = await fetch(`http://localhost:8080/status/create/${numericId}`, {
+                          method: 'POST',
+                          headers: {
+                            Authorization: `Bearer ${token}`,
+                          },
+                          body: formData,
+                        });
+
+                        if (!statusRes.ok) {
+                          let msg = 'Failed to update order status to PRODUCTION';
+                          try {
+                            const data = await statusRes.json();
                             if (data && data.message) msg = data.message;
                           } catch {}
                           setToast({ message: msg, type: 'error' });

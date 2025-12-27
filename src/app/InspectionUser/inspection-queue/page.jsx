@@ -13,6 +13,10 @@ export default function InspectionQueuePage() {
     const [designerSelectedRowNos, setDesignerSelectedRowNos] = useState([]);
     const [productionSelectedRowNos, setProductionSelectedRowNos] = useState([]);
     const [machineSelectedRowNos, setMachineSelectedRowNos] = useState([]);
+    const [showStatusModal, setShowStatusModal] = useState(false);
+    const [statusToChange, setStatusToChange] = useState('INSPECTION');
+    const [isStatusUpdating, setIsStatusUpdating] = useState(false);
+    const [statusError, setStatusError] = useState('');
 
     useEffect(() => {
         const fetchOrders = async () => {
@@ -112,6 +116,73 @@ export default function InspectionQueuePage() {
             setPdfMap({});
         }
     }, [orders]);
+
+    const updateOrderStatus = async (order, newStatus, comment = '') => {
+        if (!order || !newStatus) return;
+
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('swiftflow-user') : null;
+        if (!raw) return;
+        const auth = JSON.parse(raw);
+        const token = auth?.token;
+        if (!token) return;
+
+        const numericId = String(order.id).replace(/^SF/i, '');
+        if (!numericId) return;
+
+        try {
+            setIsStatusUpdating(true);
+            setStatusError('');
+
+            const statusPayload = {
+                newStatus,
+                comment: comment || `Inspection status updated to ${newStatus}`,
+                percentage: null,
+                attachmentUrl: null,
+            };
+
+            const formData = new FormData();
+            formData.append(
+                'status',
+                new Blob([JSON.stringify(statusPayload)], { type: 'application/json' })
+            );
+
+            const statusRes = await fetch(`http://localhost:8080/status/create/${numericId}`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+                body: formData,
+            });
+
+            if (!statusRes.ok) {
+                let msg = 'Failed to update status';
+                try {
+                    const data = await statusRes.json();
+                    if (data && data.message) msg = data.message;
+                } catch {
+                }
+                setStatusError(msg);
+                return;
+            }
+
+            setOrders(prev =>
+                prev.map(o =>
+                    o.id === order.id
+                        ? { ...o, status: newStatus, department: newStatus }
+                        : o
+                )
+            );
+            setSelectedOrder(prev =>
+                prev && prev.id === order.id
+                    ? { ...prev, status: newStatus, department: newStatus }
+                    : prev
+            );
+
+            setShowStatusModal(false);
+        } finally {
+            setIsStatusUpdating(false);
+        }
+    };
 
     const openPdfWithSelections = async (orderId) => {
         const url = pdfMap[orderId];
@@ -444,17 +515,91 @@ export default function InspectionQueuePage() {
                             </div>
                             
                             <div className="flex gap-3 pt-4 border-t border-gray-200">
-                                <button className="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md">
+                                <button
+                                    className="flex-1 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md"
+                                    onClick={() => updateOrderStatus(selectedOrder, 'COMPLETED', 'Inspection approved')}
+                                    disabled={isStatusUpdating}
+                                >
                                     Approve Inspection
                                 </button>
-                                <button className="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md">
+                                {/* <button className="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md">
                                     Reject Inspection
-                                </button>
-                                <button className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md">
+                                </button> */}
+                                <button
+                                    className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md"
+                                    onClick={() => {
+                                        setStatusToChange('INSPECTION');
+                                        setStatusError('');
+                                        setShowStatusModal(true);
+                                    }}
+                                    disabled={isStatusUpdating}
+                                >
                                     Request Changes
                                 </button>
                             </div>
                         </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {selectedOrder && showStatusModal && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center">
+                    <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => {
+                            if (!isStatusUpdating) {
+                                setShowStatusModal(false);
+                            }
+                        }}
+                    />
+                    <div className="relative bg-white rounded-lg shadow-lg max-w-sm w-full mx-4 p-4">
+                        <h4 className="text-md font-semibold text-gray-900 mb-3">Change Status</h4>
+                        <div className="mb-3 text-sm text-gray-700">
+                            Order <span className="font-medium">{selectedOrder.id}</span>
+                        </div>
+                        <div className="mb-3">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Status change
+                            </label>
+                            <select
+                                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                                value={statusToChange}
+                                onChange={(e) => setStatusToChange(e.target.value)}
+                                disabled={isStatusUpdating}
+                            >
+                                <option value="INSPECTION">INSPECTION</option>
+                                <option value="DESIGN">DESIGN</option>
+                                <option value="PRODUCTION">PRODUCTION</option>
+                                {/* <option value="PRODUCTION_READY">PRODUCTION_READY</option> */}
+                                <option value="MACHINING">MACHINING</option>
+                                <option value="COMPLETED">COMPLETED</option>
+                                <option value="ENQUIRY">ENQUIRY</option>
+                            </select>
+                        </div>
+                        {statusError && (
+                            <div className="mb-3 text-xs text-red-600">{statusError}</div>
+                        )}
+                        <div className="flex justify-end gap-2 mt-2">
+                            <button
+                                type="button"
+                                className="px-3 py-1.5 rounded-md border border-gray-300 text-sm text-gray-700 hover:bg-gray-50"
+                                onClick={() => {
+                                    if (!isStatusUpdating) {
+                                        setShowStatusModal(false);
+                                    }
+                                }}
+                                disabled={isStatusUpdating}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="px-4 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-sm text-white disabled:bg-blue-300"
+                                onClick={() => updateOrderStatus(selectedOrder, statusToChange, 'Inspection change requested')}
+                                disabled={isStatusUpdating}
+                            >
+                                Change Request
+                            </button>
                         </div>
                     </div>
                 </div>

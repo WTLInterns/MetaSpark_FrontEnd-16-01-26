@@ -223,16 +223,14 @@ export default function DesignQueuePage() {
     if (!numericId) return;
 
     try {
-      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/selection`, {
+      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) {
         const data = await response.json();
-        const combinedSelections = (data.selectedRowIds || []).map(Number);
-        // For machine view, show all combined selections as designer selections
-        // This ensures all checkboxes from production+designer are displayed
-        setDesignerSelectedRowNos(combinedSelections);
-        console.log('Machine view - loaded combined selections:', combinedSelections);
+        setDesignerSelectedRowNos((data.designerSelectedRowIds || []).map(Number));
+        setProductionSelectedRowNos((data.productionSelectedRowIds || []).map(Number));
+        setMachineSelectedRowNos((data.machineSelectedRowIds || []).map(Number));
       }
     } catch (error) {
       console.error('Error fetching three-checkbox selection:', error);
@@ -262,30 +260,49 @@ export default function DesignQueuePage() {
 
     try {
       setIsSaving(true);
-      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/selection`, {
+      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          selectedRowIds: [...designerSelectedRowNos, ...productionSelectedRowNos, ...machineSelectedRowNos].map(String),
-          attachmentUrl: pdfModalUrl,
+          machineSelectedRowIds: machineSelectedRowNos.map(String),
         }),
       });
 
       if (response.ok) {
-        setPdfModalUrl(null);
-        setPdfRows([]);
-        setPartsRows([]);
-        setMaterialRows([]);
-        setSelectedSubnestRowNos([]);
-        setDesignerSelectedRowNos([]);
-        setProductionSelectedRowNos([]);
-        setMachineSelectedRowNos([]);
+        // After saving machine checkboxes, move the order to INSPECTION
+        const statusPayload = {
+          newStatus: 'INSPECTION',
+          comment: 'Machine selection saved and sent to Inspection',
+          percentage: null,
+          attachmentUrl: pdfModalUrl,
+        };
+        const formData = new FormData();
+        formData.append(
+          'status',
+          new Blob([JSON.stringify(statusPayload)], { type: 'application/json' })
+        );
+
+        const statusRes = await fetch(`http://localhost:8080/status/create/${numericId}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        if (!statusRes.ok) {
+          let msg = 'Failed to update order status to INSPECTION';
+          try {
+            const data = await statusRes.json();
+            if (data && data.message) msg = data.message;
+          } catch {}
+          console.error(msg);
+          return;
+        }
       }
-    } catch (error) {
-      console.error('Error saving selection:', error);
     } finally {
       setIsSaving(false);
     }

@@ -166,12 +166,14 @@ export default function ProductionLinePage() {
     if (!numericId) return;
 
     try {
-      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/selection`, {
+      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) {
         const data = await response.json();
-        setDesignerSelectedRowNos((data.selectedRowIds || []).map(Number));
+        setDesignerSelectedRowNos((data.designerSelectedRowIds || []).map(Number));
+        setProductionSelectedRowNos((data.productionSelectedRowIds || []).map(Number));
+        setMachineSelectedRowNos((data.machineSelectedRowIds || []).map(Number));
       }
     } catch (error) {
       console.error('Error fetching three-checkbox selection:', error);
@@ -199,19 +201,49 @@ export default function ProductionLinePage() {
 
     try {
       setIsSendingToMachine(true);
-      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/selection`, {
+      const response = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          selectedRowIds: [...designerSelectedRowNos, ...productionSelectedRowNos, ...machineSelectedRowNos].map(String),
-          attachmentUrl: pdfModalUrl,
+          productionSelectedRowIds: productionSelectedRowNos.map(String),
         }),
       });
 
       if (response.ok) {
+        // After saving production checkboxes, move the order to MACHINING
+        const statusPayload = {
+          newStatus: 'MACHINING',
+          comment: 'Production selection saved and sent to Machining',
+          percentage: null,
+          attachmentUrl: pdfModalUrl,
+        };
+        const formData = new FormData();
+        formData.append(
+          'status',
+          new Blob([JSON.stringify(statusPayload)], { type: 'application/json' })
+        );
+
+        const statusRes = await fetch(`http://localhost:8080/status/create/${numericId}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
+
+        if (!statusRes.ok) {
+          let msg = 'Failed to update order status to MACHINING';
+          try {
+            const data = await statusRes.json();
+            if (data && data.message) msg = data.message;
+          } catch {}
+          setToast({ message: msg, type: 'error' });
+          return;
+        }
+
         setToast({ message: 'Production selection saved successfully', type: 'success' });
         setPdfModalUrl(null);
         setPdfRows([]);
