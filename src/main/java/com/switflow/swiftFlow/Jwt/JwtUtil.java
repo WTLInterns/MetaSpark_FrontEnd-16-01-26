@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component;
 import java.security.Key;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.function.Function;
 
 @Component
@@ -47,6 +49,8 @@ public class JwtUtil {
 
     public String generateToken(UserDetails userDetails) {
         Map<String, Object> claims = new HashMap<>();
+        // Add roles/authorities to the token
+        claims.put("roles", userDetails.getAuthorities());
         return createToken(claims, userDetails.getUsername());
     }
 
@@ -63,6 +67,23 @@ public class JwtUtil {
     public Boolean validateToken(String token, UserDetails userDetails) {
         final String username = extractUsername(token);
         return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+    
+    // Extract roles from token
+    public List<String> getRolesFromToken(String token) {
+        Claims claims = extractAllClaims(token);
+        Object rolesClaim = claims.get("roles");
+        
+        if (rolesClaim instanceof List) {
+            return (List<String>) rolesClaim;
+        } else if (rolesClaim instanceof String) {
+            // If it's a single role as a string, wrap it in a list
+            List<String> singleRoleList = new ArrayList<>();
+            singleRoleList.add((String) rolesClaim);
+            return singleRoleList;
+        }
+        
+        return new ArrayList<>();
     }
 
     private Key getSignKey() {

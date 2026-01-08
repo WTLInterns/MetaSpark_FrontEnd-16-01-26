@@ -6,6 +6,7 @@ import com.switflow.swiftFlow.Request.UserRegistrationRequest;
 import com.switflow.swiftFlow.Response.AuthResponse;
 import com.switflow.swiftFlow.Response.MessageResponse;
 import com.switflow.swiftFlow.Service.AuthService;
+import com.switflow.swiftFlow.utility.Role;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -44,5 +45,21 @@ public class AuthController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(new MessageResponse("Error: " + e.getMessage()));
         }
+    }
+    
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshToken(@RequestHeader("Authorization") String authHeader) {
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+            String username = authService.getUsernameFromToken(token);
+            
+            if (username != null && authService.validateToken(token, username)) {
+                String newToken = authService.generateNewToken(username);
+                User user = authService.getUserByUsername(username);
+                Role role = authService.getUserRole(user.getId());
+                return ResponseEntity.ok().body(new AuthResponse(newToken, user, role));
+            }
+        }
+        return ResponseEntity.status(401).body(new MessageResponse("Invalid or expired token"));
     }
 }

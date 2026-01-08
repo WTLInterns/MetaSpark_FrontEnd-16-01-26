@@ -80,6 +80,7 @@ public class PdfController {
         private List<String> designerSelectedRowIds;
         private List<String> productionSelectedRowIds;
         private List<String> machineSelectedRowIds;
+        private List<String> inspectionSelectedRowIds; // Added for inspection selection
         private Long machineId;
         // optional marker to indicate this comes from new three-checkbox UI
         private Boolean threeCheckbox;
@@ -106,6 +107,14 @@ public class PdfController {
 
         public void setMachineSelectedRowIds(List<String> machineSelectedRowIds) {
             this.machineSelectedRowIds = machineSelectedRowIds;
+        }
+
+        public List<String> getInspectionSelectedRowIds() {
+            return inspectionSelectedRowIds;
+        }
+
+        public void setInspectionSelectedRowIds(List<String> inspectionSelectedRowIds) {
+            this.inspectionSelectedRowIds = inspectionSelectedRowIds;
         }
 
         public Long getMachineId() {
@@ -452,7 +461,7 @@ public class PdfController {
     }
 
     @PostMapping("/order/{orderId}/three-checkbox-selection")
-    @PreAuthorize("hasAnyRole('ADMIN','DESIGN','PRODUCTION','MACHINING')")
+    @PreAuthorize("hasAnyRole('ADMIN','DESIGN','PRODUCTION','MACHINING','INSPECTION')")
     public ResponseEntity<?> saveThreeCheckboxSelection(
             @PathVariable long orderId,
             @RequestBody ThreeCheckboxRequest request
@@ -482,6 +491,7 @@ public class PdfController {
             boolean isDesign = "ROLE_DESIGN".equals(role);
             boolean isProduction = "ROLE_PRODUCTION".equals(role);
             boolean isMachining = "ROLE_MACHINING".equals(role);
+            boolean isInspection = "ROLE_INSPECTION".equals(role);
 
             // Save designer selection – only DESIGN or ADMIN may write this
             if ((isDesign || isAdmin)
@@ -536,6 +546,20 @@ public class PdfController {
                 );
             }
 
+            // Save inspection selection – only INSPECTION or ADMIN may write this
+            if ((isInspection || isAdmin)
+                    && request.getInspectionSelectedRowIds() != null
+                    && !request.getInspectionSelectedRowIds().isEmpty()) {
+                pdfService.saveRowSelectionWithoutTransition(
+                        orderId,
+                        request.getInspectionSelectedRowIds(),
+                        Department.INSPECTION,
+                        null,
+                        null,
+                        null
+                );
+            }
+
             return ResponseEntity.ok(Map.of("message", "Three-checkbox selection saved successfully"));
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of(
@@ -547,7 +571,7 @@ public class PdfController {
     }
 
     @GetMapping("/order/{orderId}/three-checkbox-selection")
-    @PreAuthorize("hasAnyRole('ADMIN','DESIGN','PRODUCTION','MACHINING')")
+    @PreAuthorize("hasAnyRole('ADMIN','DESIGN','PRODUCTION','MACHINING','INSPECTION')")
     public ResponseEntity<Map<String, Object>> getThreeCheckboxSelection(@PathVariable long orderId) {
         List<StatusResponse> history = statusService.getStatusesByOrderId(orderId);
         Map<String, Object> result = new HashMap<>();
@@ -556,6 +580,7 @@ public class PdfController {
             result.put("designerSelectedRowIds", List.of());
             result.put("productionSelectedRowIds", List.of());
             result.put("machineSelectedRowIds", List.of());
+            result.put("inspectionSelectedRowIds", List.of());
             return ResponseEntity.ok(result);
         }
 
@@ -589,25 +614,48 @@ public class PdfController {
             result.put("productionSelectedRowIds", List.of());
         }
 
-        // Get machine selection – only consider entries created by the
-        // three-checkbox flow; otherwise return an empty list so no
-        // predefined ticks are shown in the Machining UI.
-        StatusResponse machineLatest = history.stream()
-                .filter(s -> s.getNewStatus() == Department.MACHINING
-                        && s.getComment() != null
-                        && s.getComment().contains("selectedRowIds"))
-                .reduce((first, second) -> second)
-                .orElse(null);
+        // Get machine selection – for INSPECTION role, return all machine selections
+        // regardless of how they were created. For other roles, maintain the
+        // three-checkbox restriction to avoid confusing Machining UI.
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String role = null;
+        if (authentication != null && authentication.getAuthorities() != null) {
+            for (GrantedAuthority authority : authentication.getAuthorities()) {
+                String auth = authority.getAuthority();
+                if (auth != null && auth.startsWith("ROLE_")) {
+                    role = auth;
+                    break;
+                }
+            }
+        }
+        boolean isInspection = "ROLE_INSPECTION".equals(role);
+        
+        StatusResponse machineLatest = null;
+        if (isInspection) {
+            // For inspection users, look for any MACHINING records that might contain selections
+            machineLatest = history.stream()
+                    .filter(s -> s.getNewStatus() == Department.MACHINING && s.getComment() != null)
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+        } else {
+            // For other users, maintain stricter filtering
+            machineLatest = history.stream()
+                    .filter(s -> s.getNewStatus() == Department.MACHINING
+                            && s.getComment() != null
+                            && s.getComment().contains("selectedRowIds"))
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+        }
 
         if (machineLatest != null) {
             try {
                 JsonNode node = objectMapper.readTree(machineLatest.getComment());
-                // If a threeCheckbox flag is present and true, treat this as a
-                // valid machine selection for the new UI. Otherwise ignore it
-                // and report an empty list so there are no predefined ticks.
+                // For INSPECTION role, return machine selections regardless of origin.
+                // For other roles, only return selections made with three-checkbox system.
                 JsonNode marker = node.get("threeCheckbox");
                 boolean isThreeCheckbox = marker != null && marker.asBoolean(false);
-                if (isThreeCheckbox) {
+                
+                if (isInspection || isThreeCheckbox) {
                     List<String> machineIds = extractRowIdsFromComment(machineLatest.getComment());
                     result.put("machineSelectedRowIds", machineIds);
 
@@ -620,14 +668,36 @@ public class PdfController {
                         result.put("machineName", machineNameNode.asText());
                     }
                 } else {
-                    // Not created by new three-checkbox flow – ignore
+                    // Not created by new three-checkbox flow and not for inspection – ignore
                     result.put("machineSelectedRowIds", List.of());
                 }
             } catch (Exception e) {
-                result.put("machineSelectedRowIds", List.of());
+                // For INSPECTION role, if JSON parsing fails (old system), still return machine selections
+                // For other roles, only return selections from new three-checkbox system
+                if (isInspection) {
+                    List<String> machineIds = extractRowIdsFromComment(machineLatest.getComment());
+                    result.put("machineSelectedRowIds", machineIds);
+                } else {
+                    result.put("machineSelectedRowIds", List.of());
+                }
             }
         } else {
             result.put("machineSelectedRowIds", List.of());
+        }
+
+        // Get inspection selection
+        StatusResponse inspectionLatest = history.stream()
+                .filter(s -> s.getNewStatus() == Department.INSPECTION
+                        && s.getComment() != null
+                        && s.getComment().contains("selectedRowIds"))
+                .reduce((first, second) -> second)
+                .orElse(null);
+
+        if (inspectionLatest != null) {
+            List<String> inspectionIds = extractRowIdsFromComment(inspectionLatest.getComment());
+            result.put("inspectionSelectedRowIds", inspectionIds);
+        } else {
+            result.put("inspectionSelectedRowIds", List.of());
         }
 
         return ResponseEntity.ok(result);

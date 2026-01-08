@@ -60,16 +60,8 @@ public class AuthService {
             // Get user role
             Role role = getUserRole(user.getId());
             
-            org.springframework.security.core.userdetails.User userDetails = 
-                new org.springframework.security.core.userdetails.User(
-                    user.getUsername(),
-                    user.getPassword(),
-                    user.isEnabled(),
-                    true,
-                    true,
-                    true,
-                    new ArrayList<>()
-                );
+            // Load user details with authorities from CustomUserDetailsService
+            UserDetails userDetails = userDetailsService.loadUserByUsername(user.getUsername());
             
             final String token = jwtUtil.generateToken(userDetails);
 
@@ -106,7 +98,7 @@ public class AuthService {
         return savedUser;
     }
 
-    private Role getUserRole(Long userId) {
+    public Role getUserRole(Long userId) {
         // First check if user has a department set directly
         User user = userRepository.findById(userId).orElse(null);
         if (user != null && user.getDepartment() != null) {
@@ -183,5 +175,22 @@ public class AuthService {
                 designRoleRepository.save(defaultDesignRole);
                 break;
         }
+    }
+    
+    public String getUsernameFromToken(String token) {
+        return jwtUtil.extractUsername(token);
+    }
+    
+    public boolean validateToken(String token, String username) {
+        return jwtUtil.validateToken(token, userDetailsService.loadUserByUsername(username));
+    }
+    
+    public String generateNewToken(String username) {
+        UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+        return jwtUtil.generateToken(userDetails);
+    }
+    
+    public User getUserByUsername(String username) {
+        return userRepository.findByUsername(username).orElse(null);
     }
 }
