@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthProvider } from '@/components/AuthProvider';
 import { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 import Sidebar from '@/components/Sidebar';
 import { FiMenu, FiX } from 'react-icons/fi';
 
@@ -71,6 +72,23 @@ export default function ClientLayout({ children }) {
       router.push('/login');
     }
   }, [pathname, router]);
+
+  useEffect(() => {
+    if (pathname !== '/login') {
+      toast.dismiss('login-success');
+    }
+  }, [pathname]);
+
+  useEffect(() => {
+    if (pathname === '/login') return;
+    if (typeof window === 'undefined') return;
+
+    const shouldShow = sessionStorage.getItem('show-login-success') === '1';
+    if (!shouldShow) return;
+
+    sessionStorage.removeItem('show-login-success');
+    toast.success('Login successful', { id: 'login-success', duration: 2500 });
+  }, [pathname]);
 
   if (!mounted) {
     return (

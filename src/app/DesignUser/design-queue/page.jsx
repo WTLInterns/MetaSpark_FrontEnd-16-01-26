@@ -572,9 +572,33 @@ export default function DesignQueuePage() {
                               <th className="px-2 py-1">Qty</th>
                               <th className="px-2 py-1">Area (m²)</th>
                               <th className="px-2 py-1">Eff. %</th>
-                              <th className="px-2 py-1 text-center">Select</th>
+                              <th className="px-2 py-1 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    pdfRows.length > 0 &&
+                                    pdfRows.every((row) => selectedSubnestRowNos.includes(row.rowNo))
+                                  }
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    const visibleIds = pdfRows.map((row) => row.rowNo);
+                                    if (checked) {
+                                      setSelectedSubnestRowNos((prev) => {
+                                        const next = new Set(prev);
+                                        visibleIds.forEach((id) => next.add(id));
+                                        return Array.from(next);
+                                      });
+                                    } else {
+                                      setSelectedSubnestRowNos((prev) =>
+                                        prev.filter((id) => !visibleIds.includes(id))
+                                      );
+                                    }
+                                  }}
+                                />
+                              </th>
                             </tr>
                           </thead>
+
                           <tbody className="text-gray-900 divide-y divide-gray-100">
                             {pdfRows.map((row) => (
                               <tr key={row.rowNo}>
@@ -728,6 +752,20 @@ export default function DesignQueuePage() {
                       try {
                         setIsGenerating(true);
                         // 1) Persist Designer checkbox selection only
+                        const selectedItems = (pdfRows || [])
+                          .filter((row) => selectedSubnestRowNos.includes(row.rowNo))
+                          .map((row) => ({
+                            rowNo: row.rowNo,
+                            ncFile: row.ncFile,
+                            material: row.material,
+                            thickness: row.thickness,
+                            sizeX: row.sizeX,
+                            sizeY: row.sizeY,
+                            quantity: row.qty,
+                            area: row.areaM2,
+                            time: row.totalTime,
+                          }));
+
                         const selRes = await fetch(`http://localhost:8080/pdf/order/${numericId}/three-checkbox-selection`, {
                           method: 'POST',
                           headers: {
@@ -736,8 +774,11 @@ export default function DesignQueuePage() {
                           },
                           body: JSON.stringify({
                             designerSelectedRowIds: selectedSubnestRowNos.map(String),
+                            selectedRowIds: selectedSubnestRowNos,
+                            selectedItems,
                           }),
                         });
+
                         if (!selRes.ok) {
                           let msg = 'Failed to save selection';
                           try {

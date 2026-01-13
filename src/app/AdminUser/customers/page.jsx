@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { FiEye, FiEdit, FiTrash2, FiX } from 'react-icons/fi';
 import toast from 'react-hot-toast';
-import { Toaster } from 'react-hot-toast';
 import Swal from 'sweetalert2';
 import Sidebar from '@/components/Sidebar';
 import * as customerApi from './api';
@@ -231,7 +230,6 @@ export default function CustomersPage() {
     <div className="w-full">
       {/* Page content - layout is handled by ClientLayout */}
       <div className="p-6">
-        <Toaster />
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
           <div>
             <h1 className="text-xl sm:text-2xl font-semibold text-black">Customer Management</h1>

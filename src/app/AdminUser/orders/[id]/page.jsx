@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useMemo, useRef, useState, use } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import Sidebar from '@/components/Sidebar';
+import { getVisibleReportDefsForCurrentUser } from '@/utils/reportVisibility';
 
 const STEPS = ['Inquiry', 'Design', 'Production', 'Machining', 'Inspection', 'Completed'];
 
@@ -186,10 +187,10 @@ const OrderDetailsPanel = ({ isOpen, onClose, orderId }) => {
           <section>
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Reports</h3>
             <div className="space-y-2">
-              {['Notes Summary', 'Design Report', 'Production Report', 'Machining Report', 'Inspection Report'].map((report, i) => (
-                <div key={report} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
-                  <span className="text-sm text-gray-700">{report}</span>
-                  <button className="p-1 hover:bg-gray-200 rounded">
+              {visibleReports.map((report) => (
+                <div key={report.type} className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
+                  <span className="text-sm text-gray-700">{report.label}</span>
+                  <button className="p-1 hover:bg-gray-200 rounded" type="button">
                     <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
                     </svg>

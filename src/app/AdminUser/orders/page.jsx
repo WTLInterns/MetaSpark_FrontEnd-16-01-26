@@ -1,4 +1,3 @@
-
 'use client'
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -8,7 +7,7 @@ import * as orderApi from '../orders/api';
 import { useCustomerProductData } from '../dashboard/useCustomerProductData';
 import * as customerApi from '../customers/api';
 import { createProduct as createProductApi } from '../products/productService';
-import toast, { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 
 export default function AllOrdersPage() {
   const [rows, setRows] = useState([]);
@@ -91,9 +90,15 @@ export default function AllOrdersPage() {
                 customer: order.customers && order.customers.length > 0
                   ? (order.customers[0].companyName || order.customers[0].customerName || 'Unknown Customer')
                   : 'Unknown Customer',
-                products: (order.products && order.products.length > 0
-                  ? order.products[0].productName
-                  : order.customProductDetails) || 'No Product',
+                products: (() => {
+                  const names = Array.isArray(order.products)
+                    ? order.products
+                        .map((p) => p?.productName)
+                        .filter(Boolean)
+                    : [];
+
+                  return names.length ? names.join(', ') : 'No Product';
+                })(),
                 date: formattedDate,
                 status: order.status || 'Inquiry',
                 dept: department,
@@ -346,7 +351,6 @@ export default function AllOrdersPage() {
 
   return (
     <div className="w-full">
-      <Toaster />
       {/* Page content - layout is handled by ClientLayout */}
       <div className="p-6">
           <div className="flex items-center justify-between mb-3">

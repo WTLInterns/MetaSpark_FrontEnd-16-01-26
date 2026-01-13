@@ -112,9 +112,13 @@ const PdfPageWithOverlay = ({ pdf, pageNumber, scale, rows, selectedRowIds, onTo
             pointerEvents: 'none',
           }}
         >
-          {overlayPositions.map((pos) => (
+          {overlayPositions.map((pos, index) => (
             <div
-              key={pos.rowId}
+              key={
+                pos.rowId != null && String(pos.rowId).trim() !== ''
+                  ? `page-${pageNumber}-row-${String(pos.rowId)}-${index}`
+                  : `page-${pageNumber}-geom-${pos.left}-${pos.top}-${index}`
+              }
               style={{
                 position: 'absolute',
                 left: `${pos.left}px`,

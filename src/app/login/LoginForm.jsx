@@ -111,7 +111,7 @@ export default function LoginForm() {
           return;
       }
 
-      toast.success('Login successful');
+      sessionStorage.setItem('show-login-success', '1');
       router.push(redirectPath);
     } catch (error) {
       console.error('Login error:', error);

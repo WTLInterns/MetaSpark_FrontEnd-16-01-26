@@ -236,7 +236,7 @@ export default function DesignQueueDetailsPage({ params }) {
               <p className="text-sm text-gray-500">Generate and download reports.</p>
 
               <div className="mt-2 space-y-2">
-                {['Notes Summary', 'Design Report', 'Production Report', 'Machinists Report', 'Inspection Report'].map((label, index) => (
+                {['Design Report'].map((label, index) => (
                   <button
                     key={label}
                     type="button"

@@ -10,6 +10,7 @@ export default function InspectionQueuePage() {
     const [orders, setOrders] = useState([]);
     const [pdfMap, setPdfMap] = useState({});
     const [pdfModalUrl, setPdfModalUrl] = useState(null);
+
     const [pdfRows, setPdfRows] = useState([]);
     const [partsRows, setPartsRows] = useState([]);
     const [materialRows, setMaterialRows] = useState([]);
@@ -22,38 +23,46 @@ export default function InspectionQueuePage() {
     const [toast, setToast] = useState({ message: '', type: '' });
     const [userRole] = useState('INSPECTION');
 
+    const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+    const [requestChangesOpen, setRequestChangesOpen] = useState(false);
+    const [detailsHistory, setDetailsHistory] = useState([]);
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const [requestTargetStatus, setRequestTargetStatus] = useState('MACHINING');
+    const [requestComment, setRequestComment] = useState('');
+
+    const fetchOrders = async () => {
+        try {
+            const data = await orderApi.getAllOrders();
+
+            const transformed = (data || []).map((order) => {
+                const customer = order.customers && order.customers[0];
+                const customerName = customer
+                    ? (customer.companyName || customer.customerName || 'Unknown Customer')
+                    : 'Unknown Customer';
+
+                const productText = order.customProductDetails ||
+                    (order.products && order.products.length > 0
+                        ? `${order.products[0].productCode || ''} ${order.products[0].productName || ''}`.trim() || 'No Product'
+                        : 'No Product');
+
+                return {
+                    id: `SF${order.orderId}`,
+                    customer: customerName,
+                    products: productText,
+                    status: order.status || 'Inspection',
+                    department: order.department,
+                    date: order.dateAdded || '',
+                    raw: order,
+                };
+            });
+
+            setOrders(transformed);
+        } catch {
+            setOrders([]);
+        }
+    };
+
     useEffect(() => {
-        const fetchOrders = async () => {
-            try {
-                const data = await orderApi.getAllOrders();
-
-                const transformed = (data || []).map((order) => {
-                    const customer = order.customers && order.customers[0];
-                    const customerName = customer
-                        ? (customer.companyName || customer.customerName || 'Unknown Customer')
-                        : 'Unknown Customer';
-
-                    const productText = order.customProductDetails ||
-                        (order.products && order.products.length > 0
-                            ? `${order.products[0].productCode || ''} ${order.products[0].productName || ''}`.trim() || 'No Product'
-                            : 'No Product');
-
-                    return {
-                        id: `SF${order.orderId}`,
-                        customer: customerName,
-                        products: productText,
-                        status: order.status || 'Inspection',
-                        department: order.department,
-                        date: order.dateAdded || '',
-                    };
-                });
-
-                setOrders(transformed);
-            } catch {
-                setOrders([]);
-            }
-        };
-
         fetchOrders();
     }, []);
 
@@ -61,6 +70,7 @@ export default function InspectionQueuePage() {
         const fetchPdfInfo = async () => {
             try {
                 const raw = typeof window !== 'undefined' ? localStorage.getItem('swiftflow-user') : null;
+
                 if (!raw) return;
                 const auth = JSON.parse(raw);
                 const token = auth?.token;
@@ -76,7 +86,7 @@ export default function InspectionQueuePage() {
                             });
                             if (!resp.ok) return [order.id, null];
                             const history = await resp.json();
-                            
+
                             // Find the most recent PDF URL from any status
                             const withPdf = Array.isArray(history)
                                 ? history
@@ -87,7 +97,7 @@ export default function InspectionQueuePage() {
                                     )
                                     .sort((a, b) => b.id - a.id)[0]
                                 : null;
-                                
+
                             return [order.id, withPdf ? withPdf.attachmentUrl : null];
                         } catch {
                             return [order.id, null];
@@ -110,6 +120,125 @@ export default function InspectionQueuePage() {
             setPdfMap({});
         }
     }, [orders]);
+
+    const refreshInspectionQueue = async () => {
+        await fetchOrders();
+    };
+
+    const fetchStatusHistoryForOrder = async (orderId) => {
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('swiftflow-user') : null;
+        if (!raw) return [];
+        const auth = JSON.parse(raw);
+        const token = auth?.token;
+        if (!token) return [];
+
+        const numericId = String(orderId).replace(/^SF/i, '');
+        if (!numericId) return [];
+
+        try {
+            const resp = await fetch(`http://localhost:8080/status/order/${numericId}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (!resp.ok) return [];
+            const history = await resp.json();
+            return Array.isArray(history) ? history.slice().sort((a, b) => (b.id || 0) - (a.id || 0)) : [];
+        } catch {
+            return [];
+        }
+    };
+
+    const openDetailsModal = async (order) => {
+        setSelectedOrder(order);
+        setDetailsModalOpen(true);
+        setRequestChangesOpen(false);
+        setRequestComment('');
+        setRequestTargetStatus('MACHINING');
+        setDetailsLoading(true);
+        try {
+            const history = await fetchStatusHistoryForOrder(order.id);
+            setDetailsHistory(history);
+        } finally {
+            setDetailsLoading(false);
+        }
+    };
+
+    const closeDetailsModal = () => {
+        setDetailsModalOpen(false);
+        setRequestChangesOpen(false);
+        setSelectedOrder(null);
+        setDetailsHistory([]);
+        setRequestComment('');
+        setRequestTargetStatus('MACHINING');
+    };
+
+    const createStatusForOrder = async (orderId, newStatus, comment) => {
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('swiftflow-user') : null;
+        if (!raw) throw new Error('Not authenticated');
+        const auth = JSON.parse(raw);
+        const token = auth?.token;
+        if (!token) throw new Error('Not authenticated');
+
+        const numericId = String(orderId).replace(/^SF/i, '');
+        if (!numericId) throw new Error('Invalid order');
+
+        const statusPayload = {
+            newStatus,
+            comment: comment || '',
+            percentage: null,
+            attachmentUrl: pdfMap[orderId] || null,
+        };
+
+        const formData = new FormData();
+        formData.append('status', new Blob([JSON.stringify(statusPayload)], { type: 'application/json' }));
+
+        const res = await fetch(`http://localhost:8080/status/create/${numericId}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+        });
+
+        if (!res.ok) {
+            let msg = 'Failed to update status';
+            try {
+                const data = await res.json();
+                if (data && data.message) msg = data.message;
+            } catch {
+            }
+            throw new Error(msg);
+        }
+    };
+
+    const handleApprove = async () => {
+        if (!selectedOrder) return;
+        try {
+            await createStatusForOrder(selectedOrder.id, 'COMPLETED', 'Inspection Approved');
+            setToast({ message: 'Inspection Approved', type: 'success' });
+            closeDetailsModal();
+            await refreshInspectionQueue();
+        } catch (e) {
+            setToast({ message: e?.message || 'Failed to approve', type: 'error' });
+        }
+    };
+
+    const handleSaveRequestChanges = async () => {
+        if (!selectedOrder) return;
+        if (!requestTargetStatus) {
+            setToast({ message: 'Select a status', type: 'error' });
+            return;
+        }
+        if (!requestComment || requestComment.trim() === '') {
+            setToast({ message: 'Enter issue description', type: 'error' });
+            return;
+        }
+        try {
+            await createStatusForOrder(selectedOrder.id, requestTargetStatus, requestComment.trim());
+            setToast({ message: 'Changes requested', type: 'success' });
+            closeDetailsModal();
+            await refreshInspectionQueue();
+        } catch (e) {
+            setToast({ message: e?.message || 'Failed to request changes', type: 'error' });
+        }
+    };
 
     const filtered = useMemo(() => {
         return orders.filter(order => {
@@ -182,37 +311,6 @@ export default function InspectionQueuePage() {
             });
 
             if (response.ok) {
-                // After saving inspection checkboxes, move the order to COMPLETED
-                const statusPayload = {
-                    newStatus: 'COMPLETED',
-                    comment: 'Inspection selection saved and order completed',
-                    percentage: null,
-                    attachmentUrl: pdfModalUrl,
-                };
-                const formData = new FormData();
-                formData.append(
-                    'status',
-                    new Blob([JSON.stringify(statusPayload)], { type: 'application/json' })
-                );
-
-                const statusRes = await fetch(`http://localhost:8080/status/create/${numericId}`, {
-                    method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                    },
-                    body: formData,
-                });
-
-                if (!statusRes.ok) {
-                    let msg = 'Failed to update order status to COMPLETED';
-                    try {
-                        const data = await statusRes.json();
-                        if (data && data.message) msg = data.message;
-                    } catch {}
-                    setToast({ message: msg, type: 'error' });
-                    return;
-                }
-                
                 setToast({ message: 'Inspection selection saved successfully', type: 'success' });
                 setPdfModalUrl(null);
                 setPdfRows([]);
@@ -306,7 +404,7 @@ export default function InspectionQueuePage() {
                 <div className="px-6 py-4 border-b border-gray-200">
                     <h2 className="text-lg font-semibold text-gray-900">Inspection Queue</h2>
                 </div>
-                
+
                 <div className="overflow-x-auto">
                     <table className="min-w-full">
                         <thead className="bg-gray-50 border-b border-gray-200">
@@ -317,32 +415,39 @@ export default function InspectionQueuePage() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">PDF</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                             {filtered.map((order) => (
                                 <tr key={order.id} className="hover:bg-gray-50">
+
                                     <td className="px-6 py-4 whitespace-nowrap">
                                         <Link href={`/orders/${order.id}`} className="text-blue-600 hover:text-blue-800 font-medium">
                                             {order.id}
                                         </Link>
                                     </td>
+
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                         {order.customer}
                                     </td>
+
                                     <td className="px-6 py-4 text-sm text-gray-900">
                                         <div className="max-w-xs truncate" title={order.products}>
                                             {order.products}
                                         </div>
                                     </td>
+
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                                         {order.date}
                                     </td>
+
                                     <td className="px-6 py-4 whitespace-nowrap">
                                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                                             {order.status}
                                         </span>
                                     </td>
+
                                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                                         {pdfMap[order.id] ? (
                                             <div className="flex items-center gap-2 text-xs">
@@ -365,12 +470,190 @@ export default function InspectionQueuePage() {
                                             <span className="text-gray-400 text-xs">-</span>
                                         )}
                                     </td>
+
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                        <button
+                                            type="button"
+                                            onClick={() => openDetailsModal(order)}
+                                            className="inline-flex items-center px-3 py-1.5 rounded-md border border-gray-300 text-xs text-gray-700 hover:bg-gray-50"
+                                        >
+                                            View Details
+                                        </button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
             </div>
+
+            {/* Inspection Details Modal */}
+            {detailsModalOpen && selectedOrder && (
+                <div className="fixed inset-0 z-[60]">
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeDetailsModal} />
+                    <div className="absolute inset-0 flex items-center justify-center p-4">
+                        <div className="w-full max-w-3xl bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                                <h3 className="text-sm font-semibold text-gray-900">Order {selectedOrder.id} Details</h3>
+                                <button
+                                    type="button"
+                                    onClick={closeDetailsModal}
+                                    className="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                                >
+                                    ×
+                                </button>
+                            </div>
+
+                            <div className="p-4 space-y-5 text-sm text-gray-900">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div>
+                                        <div className="text-sm font-semibold text-gray-900 mb-3">Customer Information</div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="text-xs text-gray-500">Customer:</div>
+                                                <div className="text-sm text-gray-900">{selectedOrder.customer}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-xs text-gray-500">Order Date:</div>
+                                                <div className="text-sm text-gray-900">{selectedOrder.date || '—'}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <div className="text-sm font-semibold text-gray-900 mb-3">Product Details</div>
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="text-xs text-gray-500">Product(s):</div>
+                                                <div className="text-sm text-gray-900">{selectedOrder.products}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-xs text-gray-500">Status:</div>
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                                    {selectedOrder.status || 'Active'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div className="text-sm font-semibold text-gray-900 mb-3">Address Information</div>
+
+                                    <div className="space-y-3">
+                                        <div className="border border-gray-200 rounded-md overflow-hidden">
+                                            <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
+                                                <div className="text-xs font-semibold text-gray-600 tracking-wide">BILLING ADDRESS</div>
+                                                <span className="text-xs font-medium px-2 py-0.5 rounded bg-gray-200 text-gray-700">Billing</span>
+                                            </div>
+                                            <div className="px-4 py-4 text-sm text-gray-700">
+                                                {selectedOrder.raw?.billingAddress
+                                                    || selectedOrder.raw?.billing_address
+                                                    || selectedOrder.raw?.billing
+                                                    || '—'}
+                                            </div>
+                                        </div>
+
+                                        <div className="border border-gray-200 rounded-md overflow-hidden">
+                                            <div className="px-4 py-3 bg-blue-50 flex items-center justify-between">
+                                                <div className="text-xs font-semibold text-blue-700 tracking-wide">SHIPPING ADDRESS</div>
+                                                <span className="text-xs font-medium px-2 py-0.5 rounded bg-blue-100 text-blue-700">Shipping</span>
+                                            </div>
+                                            <div className="px-4 py-4 text-sm text-gray-700">
+                                                {selectedOrder.raw?.shippingAddress
+                                                    || selectedOrder.raw?.shipping_address
+                                                    || selectedOrder.raw?.shipping
+                                                    || '—'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="px-4 py-3 border-t border-gray-200 bg-white">
+                                <div className="flex items-center justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleApprove}
+                                        className="px-5 py-2 rounded-md bg-green-600 text-white text-xs font-semibold hover:bg-green-700"
+                                    >
+                                        Approve Inspection
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setRequestChangesOpen(true)}
+                                        className="px-5 py-2 rounded-md bg-gray-200 text-gray-800 text-xs font-semibold hover:bg-gray-300"
+                                    >
+                                        Request Changes
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Request Changes Modal */}
+            {detailsModalOpen && requestChangesOpen && selectedOrder && (
+                <div className="fixed inset-0 z-[70]">
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setRequestChangesOpen(false)} />
+                    <div className="absolute inset-0 flex items-center justify-center p-4">
+                        <div className="w-full max-w-lg bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden">
+                            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                                <h3 className="text-sm font-semibold text-gray-900">Request Changes</h3>
+                                <button
+                                    type="button"
+                                    onClick={() => setRequestChangesOpen(false)}
+                                    className="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <div className="p-4 space-y-4 text-sm">
+                                <div>
+                                    <div className="text-xs font-medium text-gray-700 mb-1">Send back to</div>
+                                    <select
+                                        value={requestTargetStatus}
+                                        onChange={(e) => setRequestTargetStatus(e.target.value)}
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                                    >
+                                        <option value="DESIGN">DESIGN</option>
+                                        <option value="PRODUCTION">PRODUCTION</option>
+                                        <option value="MACHINING">MACHINING</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <div className="text-xs font-medium text-gray-700 mb-1">Issue description</div>
+                                    <textarea
+                                        value={requestComment}
+                                        onChange={(e) => setRequestComment(e.target.value)}
+                                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm min-h-[120px]"
+                                        placeholder="Describe the issue found during inspection..."
+                                    />
+                                </div>
+                            </div>
+                            <div className="px-4 py-3 border-t border-gray-200 bg-white">
+                                <div className="flex items-center justify-end gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setRequestChangesOpen(false)}
+                                        className="px-3 py-2 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveRequestChanges}
+                                        className="px-3 py-2 rounded-md bg-red-600 text-white text-xs hover:bg-red-700"
+                                    >
+                                        Save
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* PDF Preview + Row Selections Modal */}
             {pdfModalUrl && (
@@ -461,7 +744,34 @@ export default function InspectionQueuePage() {
                                                         <th className="px-2 py-1 text-center">Designer</th>
                                                         <th className="px-2 py-1 text-center">Production</th>
                                                         <th className="px-2 py-1 text-center">Machine</th>
-                                                        <th className="px-2 py-1 text-center">Inspection</th>
+                                                        <th className="px-2 py-1 text-center">
+                                                            <input
+                                                                type="checkbox"
+                                                                disabled={userRole !== 'INSPECTION'}
+                                                                checked={
+                                                                    userRole === 'INSPECTION' &&
+                                                                    pdfRows.length > 0 &&
+                                                                    pdfRows.every((row) => inspectionSelectedRowNos.includes(row.rowNo))
+                                                                }
+                                                                onChange={(e) => {
+                                                                    if (userRole !== 'INSPECTION') return;
+                                                                    const checked = e.target.checked;
+                                                                    const visibleIds = pdfRows.map((row) => row.rowNo);
+                                                                    if (checked) {
+                                                                        setInspectionSelectedRowNos((prev) => {
+                                                                            const next = new Set(prev);
+                                                                            visibleIds.forEach((id) => next.add(id));
+                                                                            return Array.from(next);
+                                                                        });
+                                                                    } else {
+                                                                        setInspectionSelectedRowNos((prev) =>
+                                                                            prev.filter((id) => !visibleIds.includes(id))
+                                                                        );
+                                                                    }
+                                                                }}
+                                                                className={userRole === 'INSPECTION' ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}
+                                                            />
+                                                        </th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="text-gray-900 divide-y divide-gray-100">

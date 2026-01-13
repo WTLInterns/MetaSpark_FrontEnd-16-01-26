@@ -538,7 +538,34 @@ export default function DesignQueuePage() {
                             <th className="px-2 py-1">Eff. %</th>
                             <th className="px-2 py-1 text-center">Designer</th>
                             <th className="px-2 py-1 text-center">Production</th>
-                            <th className="px-2 py-1 text-center">Machine</th>
+                            <th className="px-2 py-1 text-center">
+                              <input
+                                type="checkbox"
+                                disabled={userRole !== 'MACHINING'}
+                                checked={
+                                  userRole === 'MACHINING' &&
+                                  pdfRows.length > 0 &&
+                                  pdfRows.every((row) => machineSelectedRowNos.includes(row.rowNo))
+                                }
+                                onChange={(e) => {
+                                  if (userRole !== 'MACHINING') return;
+                                  const checked = e.target.checked;
+                                  const visibleIds = pdfRows.map((row) => row.rowNo);
+                                  if (checked) {
+                                    setMachineSelectedRowNos((prev) => {
+                                      const next = new Set(prev);
+                                      visibleIds.forEach((id) => next.add(id));
+                                      return Array.from(next);
+                                    });
+                                  } else {
+                                    setMachineSelectedRowNos((prev) =>
+                                      prev.filter((id) => !visibleIds.includes(id))
+                                    );
+                                  }
+                                }}
+                                className={userRole === 'MACHINING' ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}
+                              />
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="text-gray-900 divide-y divide-gray-100">

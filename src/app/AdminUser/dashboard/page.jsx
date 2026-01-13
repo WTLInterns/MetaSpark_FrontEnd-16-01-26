@@ -8,19 +8,132 @@ import * as orderApi from '../orders/api';
 import * as customerApi from '../customers/api';
 import { createProduct as createProductApi } from '../products/productService';
 import toast from 'react-hot-toast';
-import { Toaster } from 'react-hot-toast';
+import { createHeaders } from '@/utils/api';
+import { getVisibleReportDefsForCurrentUser } from '@/utils/reportVisibility';
+import StatusHistoryTimeline from '@/components/StatusHistoryTimeline';
 
 function DetailsPanel({ order, onClose, onUpdateOrder }) {
   // Add state for the status update form
   const [newStatus, setNewStatus] = useState('');
   const [comment, setComment] = useState('');
   const [attachment, setAttachment] = useState(null);
-  const [percentage, setPercentage] = useState(0);
+
+  const [stageProgress, setStageProgress] = useState({
+    designProgress: Number(order?.designProgress ?? 0),
+    productionProgress: Number(order?.productionProgress ?? 0),
+    machiningProgress: Number(order?.machiningProgress ?? 0),
+    inspectionProgress: Number(order?.inspectionProgress ?? 0),
+  });
+
+  const [isSavingStageProgress, setIsSavingStageProgress] = useState(false);
+  const [stageProgressError, setStageProgressError] = useState('');
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [statusHistory, setStatusHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [selectedAttachment, setSelectedAttachment] = useState(null);
+
+  useEffect(() => {
+    const fetchStatusHistory = async () => {
+      try {
+        setLoadingHistory(true);
+        const orderId = order?.id ? order.id.replace('SF', '') : '';
+        if (!orderId) {
+          setStatusHistory([]);
+          return;
+        }
+
+        const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
+        const token = authData?.token;
+
+        const response = await fetch(`http://localhost:8080/status/order/${orderId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          setStatusHistory([]);
+          return;
+        }
+
+        const data = await response.json();
+        setStatusHistory(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error('Error fetching status history:', error);
+        setStatusHistory([]);
+      } finally {
+        setLoadingHistory(false);
+      }
+    };
+
+    fetchStatusHistory();
+  }, [order?.id]);
+
+  useEffect(() => {
+    setStageProgress({
+      designProgress: Number(order?.designProgress ?? 0),
+      productionProgress: Number(order?.productionProgress ?? 0),
+      machiningProgress: Number(order?.machiningProgress ?? 0),
+      inspectionProgress: Number(order?.inspectionProgress ?? 0),
+    });
+  }, [order?.designProgress, order?.productionProgress, order?.machiningProgress, order?.inspectionProgress]);
+
+  const visibleReports = getVisibleReportDefsForCurrentUser();
+
+  const downloadReport = async (type) => {
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8080';
+      const orderId = order.id.replace('SF', '');
+
+      const endpointByType = {
+        design: `/api/orders/${orderId}/reports/design`,
+        production: `/api/orders/${orderId}/reports/production`,
+        machinists: `/api/orders/${orderId}/reports/machinists`,
+        inspection: `/api/orders/${orderId}/reports/inspection`,
+      };
+
+      const typeLabelByType = {
+        design: 'Design',
+        production: 'Production',
+        machinists: 'Machinists',
+        inspection: 'Inspection',
+      };
+
+      const endpoint = endpointByType[type];
+      const typeLabel = typeLabelByType[type];
+      if (!endpoint || !typeLabel) {
+        throw new Error(`Unknown report type: ${type}`);
+      }
+
+      const headers = createHeaders({});
+      delete headers['Content-Type'];
+      headers.Accept = 'application/pdf';
+
+      const res = await fetch(`${baseUrl}${endpoint}`, {
+        method: 'GET',
+        headers,
+      });
+
+      if (!res.ok) {
+        const msg = await res.text().catch(() => 'Failed to download report');
+        throw new Error(msg || 'Failed to download report');
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${order.id}_${typeLabel}_Report.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Report download failed:', error);
+    }
+  };
 
   const getStatusBadgeClasses = (status) => {
     const base = 'inline-flex items-center px-3 py-1 rounded-full text-xs font-medium';
@@ -45,43 +158,105 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
     }
   };
 
-  // Handle file selection
+  const getStatusDisplayMessage = (status) => {
+    if (!status) return '';
+    if (status.displayMessage) return String(status.displayMessage);
+
+    const rawComment = status.comment != null ? String(status.comment) : '';
+    const trimmed = rawComment.trim();
+    const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+    if (isJsonLike) {
+      try {
+        JSON.parse(trimmed);
+        const to = status.newStatus ? String(status.newStatus) : '';
+        if (to.toUpperCase() === 'PRODUCTION') return 'Design selection saved and sent to Production';
+        if (to.toUpperCase() === 'MACHINING') return 'Production selection saved and sent to Machining';
+        if (to.toUpperCase() === 'INSPECTION') return 'Machining selection saved and sent to Inspection';
+        return 'Selection saved';
+      } catch {
+        // If it looks like JSON but isn't valid, fall through to normal status message
+      }
+    }
+
+    const from = status.oldStatus ? String(status.oldStatus) : '';
+    const to = status.newStatus ? String(status.newStatus) : '';
+    if (from && to) {
+      return `Status moved from ${from} to ${to}`;
+    }
+    if (to) {
+      return `Status set to ${to}`;
+    }
+    if (from) {
+      return `Status updated from ${from}`;
+    }
+    return 'Status updated';
+  };
+
+  const saveStageProgress = async (stageKey, progressValue) => {
+    setStageProgressError('');
+    setIsSavingStageProgress(true);
+
+    try {
+      const orderId = order.id.replace('SF', '');
+      const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
+      const token = authData?.token;
+
+      const stageMap = {
+        designProgress: 'DESIGN',
+        productionProgress: 'PRODUCTION',
+        machiningProgress: 'MACHINING',
+        inspectionProgress: 'INSPECTION',
+      };
+
+      const stage = stageMap[stageKey];
+      if (!stage) {
+        throw new Error('Invalid stage');
+      }
+
+      const response = await fetch(`http://localhost:8080/order/${orderId}/stage-progress`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          stage,
+          progress: Number(progressValue),
+        }),
+      });
+
+      if (!response.ok) {
+        let msg = 'Failed to update stage progress';
+        try {
+          const data = await response.json();
+          if (data?.message) msg = data.message;
+          if (data?.error) msg = data.error;
+        } catch {}
+        throw new Error(msg);
+      }
+
+      const updatedOrder = await response.json();
+      toast.success('Stage progress updated');
+
+      if (onUpdateOrder) {
+        onUpdateOrder(orderId, null, {
+          designProgress: updatedOrder.designProgress,
+          productionProgress: updatedOrder.productionProgress,
+          machiningProgress: updatedOrder.machiningProgress,
+          inspectionProgress: updatedOrder.inspectionProgress,
+        });
+      }
+    } catch (err) {
+      setStageProgressError(err?.message || 'Failed to update stage progress');
+    } finally {
+      setIsSavingStageProgress(false);
+    }
+  };
+
   const handleFileChange = (e) => {
     setAttachment(e.target.files[0]);
   };
 
-  // Fetch status history
-  useEffect(() => {
-    const fetchStatusHistory = async () => {
-      try {
-        setLoadingHistory(true);
-        const orderId = order.id.replace('SF', '');
-        
-        // Get token from localStorage
-        const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
-        const token = authData?.token;
-        
-        const response = await fetch(`http://localhost:8080/status/order/${orderId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          setStatusHistory(data);
-        }
-      } catch (error) {
-        console.error('Error fetching status history:', error);
-      } finally {
-        setLoadingHistory(false);
-      }
-    };
-    
-    fetchStatusHistory();
-  }, [order.id]);
-
-  // Handle form submission
   const handleSubmitStatus = async (e) => {
     e.preventDefault();
     if (!newStatus) {
@@ -93,38 +268,30 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
     setSubmitError('');
 
     try {
-      // Create FormData object for multipart request
       const formData = new FormData();
-      
-      // Create status request object
+
       const statusRequest = {
         newStatus: newStatus.toUpperCase(),
         comment: comment || '',
-        percentage: percentage.toString()
+        percentage: null,
       };
-      
-      // Append status request as JSON string
+
       formData.append('status', new Blob([JSON.stringify(statusRequest)], {
         type: 'application/json'
       }));
-      
-      // Append attachment if provided
+
       if (attachment) {
         formData.append('attachment', attachment);
       }
 
-      // Extract order ID from order.id (remove 'SF' prefix)
       const orderId = order.id.replace('SF', '');
-      
-      // Get token from localStorage
       const authData = JSON.parse(localStorage.getItem('swiftflow-user'));
       const token = authData?.token;
-      
-      // Make API call with authorization header
+
       const response = await fetch(`http://localhost:8080/status/create/${orderId}`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
         },
         body: formData
       });
@@ -133,32 +300,13 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
         throw new Error('Failed to update status');
       }
 
-      // Reset form
       setNewStatus('');
       setComment('');
       setAttachment(null);
-      setPercentage(0);
       toast.success('Status updated successfully!');
 
-      // Immediately refresh status history so the UI shows the latest entry
-      try {
-        const historyResponse = await fetch(`http://localhost:8080/status/order/${orderId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (historyResponse.ok) {
-          const latestHistory = await historyResponse.json();
-          setStatusHistory(latestHistory);
-        }
-      } catch (historyError) {
-        console.error('Error refreshing status history after update:', historyError);
-      }
-      
-      // Notify parent to refresh order data
       if (onUpdateOrder) {
-        onUpdateOrder(order.id.replace('SF', ''), newStatus);
+        onUpdateOrder(orderId, newStatus);
       }
     } catch (error) {
       console.error('Error updating status:', error);
@@ -179,32 +327,32 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
           </div>
           <button onClick={onClose} className="px-3 py-1.5 rounded-md border border-gray-300 hover:bg-gray-100">Close</button>
         </div>
-        
+
         {/* Attachment Modal */}
         {selectedAttachment && (
           <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4">
             <div className="relative max-w-4xl w-full max-h-[90vh] bg-white rounded-lg overflow-hidden">
               <div className="absolute top-4 right-4 flex gap-2">
-                <a 
-                  href={selectedAttachment} 
-                  download 
+                <a
+                  href={selectedAttachment}
+                  download
                   className="px-3 py-1.5 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-700"
                 >
                   Download
                 </a>
-                <button 
+                <button
                   onClick={() => setSelectedAttachment(null)}
                   className="px-3 py-1.5 bg-gray-600 text-white rounded-md text-sm hover:bg-gray-700"
                 >
                   Close
                 </button>
               </div>
-              
+
               <div className="flex items-center justify-center h-full p-4">
                 {selectedAttachment.match(/\.(jpg|jpeg|png|gif)$/i) ? (
-                  <img 
-                    src={selectedAttachment} 
-                    alt="Attachment" 
+                  <img
+                    src={selectedAttachment}
+                    alt="Attachment"
                     className="max-w-full max-h-[80vh] object-contain"
                   />
                 ) : (
@@ -212,9 +360,9 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                     <div className="text-4xl mb-4">📄</div>
                     <p className="text-lg text-gray-700 mb-2">File Preview Unavailable</p>
                     <p className="text-gray-500 mb-4">This file type cannot be previewed directly.</p>
-                    <a 
-                      href={selectedAttachment} 
-                      download 
+                    <a
+                      href={selectedAttachment}
+                      download
                       className="inline-block px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
                     >
                       Download File
@@ -244,35 +392,15 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
             );
             const progressPercent = (currentIndex / (steps.length - 1)) * 100;
 
-            // Calculate department progress percentages from status history
-            const departmentProgress = {};
-            
-            // Initialize all departments with 0%
-            steps.forEach(step => {
-              departmentProgress[step.key] = 0;
-            });
+            const departmentProgress = {
+              ENQUIRY: backendStatus === 'ENQUIRY' ? 0 : 100,
+              DESIGN: Number(order?.designProgress ?? 0),
+              PRODUCTION: Number(order?.productionProgress ?? 0),
+              MACHINING: Number(order?.machiningProgress ?? 0),
+              INSPECTION: Number(order?.inspectionProgress ?? 0),
+              COMPLETED: 0,
+            };
 
-            // Get the latest percentage for each department from status history
-            if (statusHistory && Array.isArray(statusHistory)) {
-              const departmentLatest = {};
-              
-              // Group status history by department
-              statusHistory.forEach(status => {
-                const dept = (status.newStatus || '').toUpperCase();
-                if (dept && steps.some(step => step.key === dept)) {
-                  // Convert percentage string to number, default to 0 if invalid
-                  const percent = parseInt(status.percentage) || 0;
-                  
-                  // Keep the latest (highest) percentage for each department
-                  if (!departmentLatest[dept] || percent > departmentLatest[dept]) {
-                    departmentLatest[dept] = percent;
-                    departmentProgress[dept] = percent;
-                  }
-                }
-              });
-            }
-
-            // Define colors for each department
             const departmentColors = {
               'ENQUIRY': '#a855f7',    // purple
               'DESIGN': '#f97316',     // orange
@@ -332,9 +460,9 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                         {/* Horizontal small progress bar for each department */}
                         <div className="w-16 mt-1">
                           <div className="w-full bg-gray-200 rounded-full h-1.5">
-                            <div 
+                            <div
                               className="h-1.5 rounded-full"
-                              style={{ 
+                              style={{
                                 width: `${departmentPercentage}%`,
                                 backgroundColor: departmentColors[step.key] || '#9ca3af'
                               }}
@@ -377,7 +505,7 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                 <div>
                   <div className="text-xs text-black mb-1">Billing Address</div>
                   <div className="text-black">
-                    {order.customers && order.customers.length > 0 && order.customers[0].billingAddress 
+                    {order.customers && order.customers.length > 0 && order.customers[0].billingAddress
                       ? order.customers[0].billingAddress.replace(/\n$/, '') // Remove trailing newline
                       : 'Not specified'}
                   </div>
@@ -385,7 +513,7 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                 <div>
                   <div className="text-xs text-black mb-1">Shipping Address</div>
                   <div className="text-black">
-                    {order.customers && order.customers.length > 0 && order.customers[0].shippingAddress 
+                    {order.customers && order.customers.length > 0 && order.customers[0].shippingAddress
                       ? order.customers[0].shippingAddress.replace(/\n$/, '') // Remove trailing newline
                       : 'Not specified'}
                   </div>
@@ -397,7 +525,7 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                 <div className="sm:col-span-2">
                   <div className="text-xs text-black mb-1">Address</div>
                   <div className="text-black">
-                    {order.customers && order.customers.length > 0 && order.customers[0].primaryAddress 
+                    {order.customers && order.customers.length > 0 && order.customers[0].primaryAddress
                       ? order.customers[0].primaryAddress.replace(/\n$/, '') // Remove trailing newline
                       : 'Not specified'}
                   </div>
@@ -406,7 +534,54 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
             </section>
 
             <section className="bg-white border border-gray-200 rounded-lg p-4">
-              <h3 className="font-semibold text-black mb-3">Update Order Status</h3>
+              <h3 className="font-semibold text-black mb-3">Update Stage Progress</h3>
+              {stageProgressError && (
+                <div className="mb-3 p-2 bg-red-50 text-red-700 text-sm rounded">
+                  {stageProgressError}
+                </div>
+              )}
+
+              {(() => {
+                const labels = {
+                  designProgress: 'Design Progress (%)',
+                  productionProgress: 'Production Progress (%)',
+                  machiningProgress: 'Machining Progress (%)',
+                  inspectionProgress: 'Inspection Progress (%)',
+                };
+
+                const keysInRoleOrder = ['designProgress', 'productionProgress', 'machiningProgress', 'inspectionProgress'];
+
+                return (
+                  <div className="space-y-4">
+                    {keysInRoleOrder.map((key) => (
+                      <div key={key}>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs text-black">{labels[key]}</label>
+                          <span className="text-xs text-gray-600">{Number(stageProgress[key] || 0)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={Number(stageProgress[key] || 0)}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            setStageProgress((prev) => ({ ...prev, [key]: next }));
+                          }}
+                          onMouseUp={(e) => saveStageProgress(key, e.target.value)}
+                          onTouchEnd={(e) => saveStageProgress(key, e.target.value)}
+                          disabled={isSavingStageProgress}
+                          className="w-full"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </section>
+
+            <section className="bg-white border border-gray-200 rounded-lg p-4">
+              <h3 className="font-semibold text-black">Update Order Status</h3>
               {submitError && (
                 <div className="mb-3 p-2 bg-red-50 text-red-700 text-sm rounded">
                   {submitError}
@@ -416,58 +591,39 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs text-black mb-1">New Status</label>
-                    <select 
+                    <select
                       value={newStatus}
                       onChange={(e) => setNewStatus(e.target.value)}
                       className="w-full border border-gray-200 rounded-md px-2 py-2 text-sm"
                       disabled={isSubmitting}
                     >
                       <option value="">Select next status...</option>
-                      {['Enquiry','Design','Production','Machining','Inspection','Completed'].map(s => (
+                      {['Enquiry', 'Design', 'Production', 'Machining', 'Inspection', 'Completed'].map(s => (
                         <option key={s} value={s.toUpperCase()}>{s}</option>
                       ))}
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs text-black mb-1">Attachment (Optional)</label>
-                    <input 
-                      type="file" 
+                    <input
+                      type="file"
                       onChange={handleFileChange}
-                      className="block w-full text-sm text-gray-600 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200" 
+                      className="block w-full text-sm text-gray-600 file:mr-2 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                       disabled={isSubmitting}
                     />
                   </div>
                   <div className="sm:col-span-2">
                     <label className="block text-xs text-black mb-1">Comments</label>
-                    <textarea 
+                    <textarea
                       value={comment}
                       onChange={(e) => setComment(e.target.value)}
-                      placeholder="Add comments about the status change..." 
-                      className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm min-h-[90px] text-black" 
+                      placeholder="Add comments about the status change..."
+                      className="w-full border border-gray-200 rounded-md px-3 py-2 text-sm min-h-[90px] text-black"
                       disabled={isSubmitting}
                     />
                   </div>
                   <div className="sm:col-span-2">
-                    <label className="block text-xs text-black mb-1">Progress Percentage: {percentage}%</label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={percentage}
-                      onChange={(e) => setPercentage(parseInt(e.target.value))}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                      disabled={isSubmitting}
-                    />
-                    <div className="flex justify-between text-xs text-gray-500 mt-1">
-                      <span>0%</span>
-                      <span>25%</span>
-                      <span>50%</span>
-                      <span>75%</span>
-                      <span>100%</span>
-                    </div>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <button 
+                    <button
                       type="submit"
                       disabled={isSubmitting}
                       className={`bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-2 rounded-md ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -479,87 +635,16 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
               </form>
             </section>
 
-            <section className="bg-white border border-gray-200 rounded-lg p-4">
-              <div className="mb-2">
-                <h3 className="font-semibold text-black">Status History</h3>
-                <p className="text-xs text-gray-500 mt-0.5">A log of all status changes for this order.</p>
-              </div>
-              {loadingHistory ? (
-                <div className="border border-dashed border-gray-300 rounded-md p-8 text-center text-gray-500">
-                  Loading history...
-                </div>
-              ) : statusHistory.length > 0 ? (
-                <div className="space-y-5">
-                  {statusHistory.map((status) => {
-                    const fileName = status.attachmentUrl
-                      ? status.attachmentUrl.split('/').pop()
-                      : '';
+            <StatusHistoryTimeline
+              statusHistory={statusHistory}
+              loadingHistory={loadingHistory}
+              getStatusBadgeClasses={getStatusBadgeClasses}
+              getStatusDisplayMessage={getStatusDisplayMessage}
+              onSelectAttachment={setSelectedAttachment}
+              userLabel="Admin User"
+              userInitials="AU"
+            />
 
-                    return (
-                      <div key={status.id} className="flex items-start justify-between gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className="h-9 w-9 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
-                            <span className="text-xs font-semibold text-gray-700">AU</span>
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900 mb-1">Admin User</p>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className={getStatusBadgeClasses(status.oldStatus)}>
-                                {status.oldStatus || '—'}
-                              </span>
-                              <span className="text-gray-400 text-xs">
-                                →
-                              </span>
-                              <span className={getStatusBadgeClasses(status.newStatus)}>
-                                {status.newStatus || '—'}
-                              </span>
-                            </div>
-                            {/* {status.percentage && (
-                              <div className="mb-2">
-                                <div className="flex justify-between text-xs mb-1">
-                                  <span className="text-gray-500">Progress</span>
-                                  <span className="text-gray-700 font-medium">{status.percentage}%</span>
-                                </div>
-                                <div className="w-full bg-gray-200 rounded-full h-1.5">
-                                  <div 
-                                    className="bg-indigo-600 h-1.5 rounded-full" 
-                                    style={{ width: `${status.percentage}%` }}
-                                  ></div>
-                                </div>
-                              </div>
-                            )} */}
-                            {status.comment && (
-                              <p className="text-sm text-gray-700 mb-2">{status.comment}</p>
-                            )}
-                            {status.attachmentUrl && (
-                              <div className="mt-1 space-y-1">
-                                <div className="flex items-center gap-1 text-xs text-gray-500 uppercase tracking-wide">
-                                  <span className="text-[13px]">Paperclip</span>
-                                  <span>Attachments</span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedAttachment(status.attachmentUrl)}
-                                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-100 text-xs text-gray-800 hover:bg-gray-200 border border-gray-200"
-                                >
-                                  <span>Download</span>
-                                  <span className="truncate max-w-[160px] text-left">{fileName || 'Download attachment'}</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-xs text-gray-500 whitespace-nowrap mt-1">{status.createdAt}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="border border-dashed border-gray-300 rounded-md p-8 text-center text-gray-500">
-                  No History
-                </div>
-              )}
-            </section>
           </div>
 
           <div className="space-y-6">
@@ -568,7 +653,7 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
                 <h3 className="font-semibold text-black">Assigned Team</h3>
                 <button className="text-black hover:text-black">✎</button>
               </div>
-              {['Design','Production','Machinists','Inspection'].map(team => (
+              {['Design', 'Production', 'Machinists', 'Inspection'].map(team => (
                 <div key={team} className="flex items-center justify-between py-2">
                   <div className="flex items-center gap-3">
                     <div className="h-8 w-8 rounded-full bg-gray-100 text-gray-500 flex items-center justify-center">?</div>
@@ -584,10 +669,16 @@ function DetailsPanel({ order, onClose, onUpdateOrder }) {
 
             <section className="bg-white border border-gray-200 rounded-lg p-4">
               <h3 className="font-semibold text-black mb-3">Reports</h3>
-              {['Notes Summary','Design Report','Production Report','Machinists Report','Inspection Report'].map((r, i) => (
-                <div key={r} className={`flex items-center justify-between px-3 py-2 rounded-md ${i===0 ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50'}`}>
-                  <span className="text-black">{r}</span>
-                  <button className="text-black hover:text-black">⬇</button>
+              {visibleReports.map((r, i) => (
+                <div key={r.type} className={`flex items-center justify-between px-3 py-2 rounded-md ${i === 0 ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50'}`}>
+                  <span className="text-black">{r.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => downloadReport(r.type)}
+                    className="text-black hover:text-black"
+                  >
+                    ⬇
+                  </button>
                 </div>
               ))}
             </section>
@@ -672,16 +763,25 @@ export default function DashboardPage() {
           customer: order.customers && order.customers.length > 0 
             ? (order.customers[0].companyName || order.customers[0].customerName || 'Unknown Customer')
             : 'Unknown Customer',
-          products: order.customProductDetails || 
-            (order.products && order.products.length > 0 
-              ? `${order.products[0].productCode} - ${order.products[0].productName}`
-              : 'No Product'),
+          products: (() => {
+            const names = Array.isArray(order.products)
+              ? order.products
+                  .map((p) => p?.productName)
+                  .filter(Boolean)
+              : [];
+
+            return names.length ? names.join(', ') : 'No Product';
+          })(),
           date: formattedDate,
           status: order.status || 'Inquiry',
           department: department, // Use the actual department from API
           units: order.units || '',
           material: order.material || '',
-          customers: order.customers || [] // Preserve the full customers array for the details panel
+          customers: order.customers || [], // Preserve the full customers array for the details panel
+          designProgress: order.designProgress ?? 0,
+          productionProgress: order.productionProgress ?? 0,
+          machiningProgress: order.machiningProgress ?? 0,
+          inspectionProgress: order.inspectionProgress ?? 0,
         };
       });
 
@@ -908,7 +1008,6 @@ export default function DashboardPage() {
 
   return (
     <div className="w-full">
-      <Toaster />
       {/* Main content */}
       <main className="w-full p-0">
         {/* Top bar */}
@@ -1017,20 +1116,28 @@ export default function DashboardPage() {
           <DetailsPanel 
             order={selectedOrder} 
             onClose={() => setSelectedOrder(null)}
-            onUpdateOrder={(orderId, newStatus) => {
-              // Update the selected order's department
-              setSelectedOrder(prev => ({
-                ...prev,
-                department: newStatus
-              }));
-              
-              // Also update in the rows list
-              setRows(prevRows => 
-                prevRows.map(row => 
-                  row.id === `SF${orderId}` 
-                    ? { ...row, department: newStatus } 
-                    : row
-                )
+            onUpdateOrder={(orderId, newStatus, progressPatch) => {
+              setSelectedOrder((prev) => {
+                const next = { ...prev };
+                if (newStatus) next.department = newStatus;
+                if (progressPatch) {
+                  next.designProgress = progressPatch.designProgress;
+                  next.productionProgress = progressPatch.productionProgress;
+                  next.machiningProgress = progressPatch.machiningProgress;
+                  next.inspectionProgress = progressPatch.inspectionProgress;
+                }
+                return next;
+              });
+
+              setRows((prevRows) =>
+                prevRows.map((row) => {
+                  if (row.id !== `SF${orderId}`) return row;
+                  return {
+                    ...row,
+                    ...(newStatus ? { department: newStatus } : {}),
+                    ...(progressPatch ? progressPatch : {}),
+                  };
+                })
               );
             }}
           />

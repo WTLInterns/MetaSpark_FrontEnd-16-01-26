@@ -649,7 +649,34 @@ export default function ProductionLinePage() {
                             <th className="px-2 py-1">Area (m²)</th>
                             <th className="px-2 py-1">Eff. %</th>
                             <th className="px-2 py-1 text-center">Designer</th>
-                            <th className="px-2 py-1 text-center">Production</th>
+                            <th className="px-2 py-1 text-center">
+                              <input
+                                type="checkbox"
+                                disabled={userRole !== 'PRODUCTION'}
+                                checked={
+                                  userRole === 'PRODUCTION' &&
+                                  pdfRows.length > 0 &&
+                                  pdfRows.every((row) => productionSelectedRowNos.includes(row.rowNo))
+                                }
+                                onChange={(e) => {
+                                  if (userRole !== 'PRODUCTION') return;
+                                  const checked = e.target.checked;
+                                  const visibleIds = pdfRows.map((row) => row.rowNo);
+                                  if (checked) {
+                                    setProductionSelectedRowNos((prev) => {
+                                      const next = new Set(prev);
+                                      visibleIds.forEach((id) => next.add(id));
+                                      return Array.from(next);
+                                    });
+                                  } else {
+                                    setProductionSelectedRowNos((prev) =>
+                                      prev.filter((id) => !visibleIds.includes(id))
+                                    );
+                                  }
+                                }}
+                                className={userRole === 'PRODUCTION' ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}
+                              />
+                            </th>
                             <th className="px-2 py-1 text-center">Machine</th>
                           </tr>
                         </thead>
