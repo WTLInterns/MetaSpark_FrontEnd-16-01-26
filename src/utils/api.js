@@ -35,10 +35,13 @@ const isTokenExpired = (token) => {
   }
 };
 
-// Helper function to check if user is authenticated and token is valid
+// Helper function to check if user is authenticated.
+// We only check for the presence of a token here and rely on the backend
+// to determine if it is still valid. This avoids issues with local clock
+// drift or token parsing on the client side causing premature logouts.
 const isAuthenticated = () => {
   const token = getAuthToken();
-  return token && !isTokenExpired(token);
+  return !!token;
 };
 
 // Create headers with auth token
@@ -59,12 +62,9 @@ const createHeaders = (customHeaders = {}) => {
 // Handle API responses and errors
 const handleResponse = async (response) => {
   if (response.status === 401) {
-    // Token expired or invalid, redirect to login
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('swiftflow-user');
-      localStorage.removeItem('swiftflow-token');
-      window.location.href = '/login';
-    }
+    // Token expired or invalid. Do NOT redirect here.
+    // Let the higher-level apiRequest logic try a token refresh first.
+    // If refresh also fails, apiRequest will clear storage and redirect to login.
     throw new Error('Session expired. Please log in again.');
   }
 
@@ -96,18 +96,9 @@ const handleResponse = async (response) => {
 
 // Main API utility function
 const apiRequest = async (endpoint, options = {}) => {
-  // Check authentication before making the request
-  if (!isAuthenticated()) {
-    // Try to refresh the token if not authenticated
-    const refreshed = await attemptTokenRefresh();
-    if (!refreshed) {
-      // Redirect to login if token refresh failed
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
-      }
-      throw new Error('Not authenticated. Please log in.');
-    }
-  }
+  // Always attempt the request with whatever token we have.
+  // If the backend reports 401, apiRequest's error handling will try a
+  // token refresh and only then redirect to login if it still fails.
 
   const { method = 'GET', body, headers: customHeaders, params } = options;
 
@@ -152,8 +143,10 @@ const apiRequest = async (endpoint, options = {}) => {
         const retryResponse = await fetch(url, retryConfig);
         return await handleResponse(retryResponse);
       } else {
-        // Redirect to login if refresh failed
+        // Redirect to login if refresh failed: clear stored auth and send to login page
         if (typeof window !== 'undefined') {
+          localStorage.removeItem('swiftflow-user');
+          localStorage.removeItem('swiftflow-token');
           window.location.href = '/login';
         }
       }
