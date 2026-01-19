@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -55,22 +56,15 @@ public class OrderController {
     @GetMapping("/getAll")
     @PreAuthorize("hasAnyRole('ADMIN','DESIGN','PRODUCTION','MACHINING','INSPECTION')")
     public ResponseEntity<List<OrderResponse>> getAllOrders(Authentication authentication) {
-        String username = authentication.getName();
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("Authenticated user not found: " + username));
-
-        Department userDept = user.getDepartment();
-
-        // Admin can see all orders; other departments are restricted to their own
-        List<OrderResponse> response;
-        if (userDept == Department.ADMIN) {
-            response = orderService.getAllOrders();
-        } else {
-            // Fall back to department-based filtering for non-admin users
-            response = orderService.getOrdersByDepartment(userDept.name());
-        }
-
+        List<OrderResponse> response = orderService.getAllOrders();
         return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/delete/{orderId}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> deleteOrder(@PathVariable Long orderId) {
+        orderService.deleteOrder(orderId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/getByDepartment/{department}")

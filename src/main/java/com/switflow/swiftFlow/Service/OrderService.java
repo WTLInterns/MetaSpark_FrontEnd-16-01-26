@@ -1,6 +1,7 @@
 package com.switflow.swiftFlow.Service;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -10,6 +11,7 @@ import com.switflow.swiftFlow.Entity.Product;
 import com.switflow.swiftFlow.Repo.CustomerRepo;
 import com.switflow.swiftFlow.Repo.OrderRepository;
 import com.switflow.swiftFlow.Repo.ProductRepository;
+import com.switflow.swiftFlow.Repo.StatusRepository;
 import com.switflow.swiftFlow.Request.OrderRequest;
 import com.switflow.swiftFlow.Response.OrderResponse;
 import com.switflow.swiftFlow.Response.OrderResponse.CustomerInfo;
@@ -36,6 +38,9 @@ public class OrderService {
 
     @Autowired
     private ProductRepository productRepository;
+
+    @Autowired
+    private StatusRepository statusRepository;
 
     public OrderResponse updateStageProgress(Long orderId, String stage, Integer progress) {
         Orders order = orderRepository.findById(orderId)
@@ -213,7 +218,7 @@ public class OrderService {
     }
 
     public List<OrderResponse> getAllOrders() {
-        return orderRepository.findAll().stream()
+        return orderRepository.findAll(Sort.by(Sort.Direction.DESC, "orderId")).stream()
             .map(order -> {
                 OrderResponse response = new OrderResponse();
                 response.setOrderId(order.getOrderId());
@@ -266,6 +271,38 @@ public class OrderService {
                 return response;
             })
             .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public void deleteOrder(Long orderId) {
+        Orders order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException("Order not found with ID: " + orderId));
+
+        // Remove dependent Status rows first (FK to orders)
+        statusRepository.deleteByOrdersOrderId(orderId);
+
+        // Break ManyToMany relations (join tables) from owning side (Customer/Product)
+        if (order.getCustomers() != null) {
+            for (Customer c : order.getCustomers()) {
+                if (c.getOrders() != null) {
+                    c.getOrders().removeIf(o -> o.getOrderId() != null && o.getOrderId().equals(orderId));
+                }
+                customerRepository.save(c);
+            }
+            order.getCustomers().clear();
+        }
+
+        if (order.getProducts() != null) {
+            for (Product p : order.getProducts()) {
+                if (p.getOrders() != null) {
+                    p.getOrders().removeIf(o -> o.getOrderId() != null && o.getOrderId().equals(orderId));
+                }
+                productRepository.save(p);
+            }
+            order.getProducts().clear();
+        }
+
+        orderRepository.delete(order);
     }
 
 
