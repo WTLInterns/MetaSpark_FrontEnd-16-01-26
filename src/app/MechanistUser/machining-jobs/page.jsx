@@ -1,4 +1,3 @@
-
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -6,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import PdfRowOverlayViewer from '@/components/PdfRowOverlayViewer';
 import * as orderApi from '@/app/ProductionUser/orders/api';
+import { detectPdfType, analyzePdfType, getPdfApiEndpoints, LoadingSpinner, PdfTypeIndicator } from '../../../utils/pdfUtils';
 
 export default function DesignQueuePage() {
   const router = useRouter();
@@ -37,6 +37,10 @@ export default function DesignQueuePage() {
   const [form, setForm] = useState({ customer: '', products: '', custom: '', units: '', material: '', dept: '' });
   const [userRole, setUserRole] = useState('MACHINING');
   const [toast, setToast] = useState({ message: '', type: '' });
+  // PDF loading states
+  const [isRowsLoading, setIsRowsLoading] = useState(false);
+  const [isAnalyzingPdf, setIsAnalyzingPdf] = useState(false);
+  const [pdfType, setPdfType] = useState('standard');
 
   const createOrder = () => {
     const currentMax = Math.max(
